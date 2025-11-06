@@ -22,7 +22,7 @@ class EntranceScreen extends StatelessWidget {
 
     return Scaffold(
       // 外层深棕色背景（设计图中的外层边框色）
-      backgroundColor: const Color(0xFF6A4A4A),
+      backgroundColor: const Color(0xFFC168EE),
       body: Center(
         child: Container(
           // 紫色区域尺寸：宽度占屏幕90%，高度占屏幕85%
