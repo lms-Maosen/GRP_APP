@@ -12,6 +12,9 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_blue_plus: ^1.30.0  # 添加这一行
+  path_provider: ^2.1.1
+  permission_handler: ^11.0.0
+  csv: ^5.0.3
   # 如果你还需要权限处理，可以添加：
   # permission_handler: ^11.0.0
 
