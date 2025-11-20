@@ -117,6 +117,25 @@ class _HomeTabState extends State<HomeTab> {
       }
 
       await device.connect();
+
+      if (Platform.isAndroid) {
+        try {
+          // 1. 请求大 MTU
+          print("Requesting MTU 512...");
+          await device.requestMtu(512);
+          await Future.delayed(const Duration(milliseconds: 200));
+
+          // 2. === 新增：请求高优先级连接 (Android 必需) ===
+          // 这会将连接间隔从默认的 ~40ms 降低到 ~11ms，极大提高吞吐量，防止缓冲区堆积
+          print("Requesting High Priority...");
+          await device.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
+          await Future.delayed(const Duration(milliseconds: 100)); // 再等一下让设置生效
+
+        } catch (e) {
+          print("Optimization failed: $e");
+        }
+      }
+
       setState(() {
         _isConnected = true;
         _connectedDevice = device;
