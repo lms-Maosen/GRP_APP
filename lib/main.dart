@@ -1,11 +1,18 @@
 import 'package:flutter/material.dart';
-// 导入自定义入口页（注意路径是 screen 单数，与你的文件夹名匹配）
-import 'ui/screen/entrance_screen.dart';
-// 导入自定义主题配置
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:provider/provider.dart';
+import 'ui/screen/home_screen.dart';
 import 'ui/theme/app_theme.dart';
+import 'i18n/app_localizations.dart';
+import 'providers/LocaleProvider.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(
+    ChangeNotifierProvider(
+      create: (context) => LocaleProvider(),
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -13,11 +20,22 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final localeProvider = Provider.of<LocaleProvider>(context);
+
     return MaterialApp(
-      title: 'Smart Fitness Pod', // 应用名称（替换默认的 Flutter Demo）
-      theme: AppTheme.lightTheme, // 使用自定义义的主题配置
-      // 初始页面设置为入口页（EntranceScreen）
-      home: const EntranceScreen(),
+      title: 'Smart Fitness Pod',
+      theme: AppTheme.lightTheme,
+      // 仅新增以下多语言配置，其余代码与 branch2 完全一致
+      locale: localeProvider.currentLocale,
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      // 保留 branch2 原有首页配置
+      home: const HomeScreen(username: "当前用户名"),
     );
   }
 }

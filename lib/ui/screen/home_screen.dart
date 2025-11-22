@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'home_tab.dart';
 import 'history_tab.dart';
 import 'settings_tab.dart';
+// 新增：导入多语言工具类
+import '../../i18n/app_localizations.dart';
 
 class HomeScreen extends StatefulWidget {
   final String username;
@@ -23,6 +25,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 新增：获取多语言实例
+    final loc = AppLocalizations.of(context);
+
     return Scaffold(
       appBar: AppBar(
         title: Center(
@@ -41,18 +46,19 @@ class _HomeScreenState extends State<HomeScreen> {
             _currentIndex = index;
           });
         },
-        items: const [
+        // 关键修改：移除 const，替换 label 为多语言翻译
+        items: [
           BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Home',
+            icon: const Icon(Icons.home),
+            label: loc.translate('home'), // 替换固定英文为翻译
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.history),
-            label: 'History',
+            icon: const Icon(Icons.history),
+            label: loc.translate('history'), // 替换固定英文为翻译
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: 'Settings',
+            icon: const Icon(Icons.settings),
+            label: loc.translate('settings'), // 替换固定英文为翻译
           ),
         ],
       ),

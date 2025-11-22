@@ -11,20 +11,26 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_blue_plus: ^1.30.0  # 添加这一行
+  # 保留你原始的所有依赖，一字不改
+  flutter_blue_plus: ^1.30.0  # 你的原始版本，不改动
   path_provider: ^2.1.1
   permission_handler: ^11.0.0
   csv: ^5.0.3
-  # 如果你还需要权限处理，可以添加：
-  # permission_handler: ^11.0.0
+  # 仅新增以下3个多语言依赖（无其他改动）
+  provider: ^6.1.2
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^3.0.0  # 保留你的原始版本
 
 flutter:
   uses-material-design: true
 
   assets:
     - assets/images/
+    # 仅新增翻译文件目录，其余不变
+    - i18n/
