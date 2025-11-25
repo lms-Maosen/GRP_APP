@@ -28,6 +28,9 @@ class _HomeTabState extends State<HomeTab> {
   Timer? _dataTimer;
   StreamSubscription<List<int>>? _dataSubscription;
   String _csvFilePath = '';
+  DateTime _recordingStartTime = DateTime.now();
+  int _totalSamplesReceived = 0;
+  double _sampleIntervalMs = 1000.0 / 104.0;
 
   @override
   void initState() {
@@ -210,10 +213,6 @@ class _HomeTabState extends State<HomeTab> {
     if (data.isEmpty) return;
 
     try {
-      // 根据Zephyr代码，数据格式为：
-      // 1字节: 样本计数 (count)
-      // 随后是 count * 24字节: 每个样本包含6个float (加速度xyz + 陀螺仪xyz)
-
       ByteData byteData = ByteData.sublistView(Uint8List.fromList(data));
       int offset = 0;
 
@@ -222,25 +221,19 @@ class _HomeTabState extends State<HomeTab> {
       offset += 1;
 
       // 验证数据长度
-      int expectedLength = 1 + sampleCount * 24; // 1字节计数 + 样本数 * 24字节
+      int expectedLength = 1 + sampleCount * 24;
       if (data.length != expectedLength) {
         print("数据长度不匹配: 期望 $expectedLength, 实际 ${data.length}");
         return;
       }
 
-      // 获取当前时间作为基准
-      DateTime currentTime = DateTime.now();
-
-      // 根据采样频率计算时间间隔 (104Hz = 每个样本间隔约9.615ms)
-      double sampleIntervalMs = 1000.0 / 104.0; // 约9.615毫秒
-
       // 解析每个样本
       for (int i = 0; i < sampleCount; i++) {
-        // 计算这个样本的时间戳（假设样本是按时间顺序排列的）
-        // 使用接收时间减去累积的延迟来估算实际采样时间
-        DateTime sampleTime = currentTime.subtract(Duration(milliseconds: ((sampleCount - 1 - i) * sampleIntervalMs).round()));
+        // 使用固定频率计算时间戳，避免时间回退
+        int sampleOffsetMs = (_totalSamplesReceived * _sampleIntervalMs).round();
+        DateTime sampleTime = _recordingStartTime.add(Duration(milliseconds: sampleOffsetMs));
 
-        // 读取加速度数据 (3个float)
+        // 读取加速度数据
         double accelX = byteData.getFloat32(offset, Endian.little);
         offset += 4;
         double accelY = byteData.getFloat32(offset, Endian.little);
@@ -248,7 +241,7 @@ class _HomeTabState extends State<HomeTab> {
         double accelZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 读取陀螺仪数据 (3个float)
+        // 读取陀螺仪数据
         double gyroX = byteData.getFloat32(offset, Endian.little);
         offset += 4;
         double gyroY = byteData.getFloat32(offset, Endian.little);
@@ -256,7 +249,7 @@ class _HomeTabState extends State<HomeTab> {
         double gyroZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 添加到数据列表，使用计算出的采样时间
+        // 添加到数据列表
         _sensorData.add([
           sampleTime.toIso8601String(),
           accelX.toStringAsFixed(6),
@@ -266,9 +259,11 @@ class _HomeTabState extends State<HomeTab> {
           gyroY.toStringAsFixed(6),
           gyroZ.toStringAsFixed(6),
         ]);
+
+        _totalSamplesReceived++;
       }
 
-      print("成功解析 $sampleCount 个传感器样本");
+      print("成功解析 $sampleCount 个传感器样本，总样本数: $_totalSamplesReceived");
 
     } catch (e) {
       print("解析传感器数据错误: $e");
@@ -291,10 +286,14 @@ class _HomeTabState extends State<HomeTab> {
   // 开始记录数据 - 自动开始，不显示控制界面
   void _startRecording() async {
     if (_isRecording) return;
+
     setState(() {
       _isRecording = true;
       _sensorData.clear();
+      _totalSamplesReceived = 0;
+      _recordingStartTime = DateTime.now(); // 重置起始时间
     });
+
     // 添加CSV表头
     _sensorData.add([
       'Timestamp',
@@ -305,20 +304,25 @@ class _HomeTabState extends State<HomeTab> {
       'Gyro_Y',
       'Gyro_Z'
     ]);
+
     // 创建CSV文件 - 保存到Download目录
     String downloadPath = '/storage/emulated/0/Download';
     String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
     _csvFilePath = '$downloadPath/sensor_data_$timestamp.csv';
+
     // 确保目录存在
     Directory downloadDir = Directory(downloadPath);
     if (!await downloadDir.exists()) {
       await downloadDir.create(recursive: true);
     }
+
     // 定时保存数据到文件
     _dataTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       _saveDataToCsv();
     });
+
     print("开始自动记录数据到: $_csvFilePath");
+    print("记录起始时间: $_recordingStartTime");
   }
 
   // 停止记录数据
@@ -329,8 +333,11 @@ class _HomeTabState extends State<HomeTab> {
     _saveDataToCsv();
     setState(() {
       _isRecording = false;
+      _totalSamplesReceived = 0; // 重置样本计数
     });
     print("停止记录数据，文件保存在: $_csvFilePath");
+    print("总记录样本数: $_totalSamplesReceived");
+
     // 显示保存成功的提示
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
