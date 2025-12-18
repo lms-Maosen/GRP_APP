@@ -17,6 +17,11 @@ class HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<HomeTab> {
+  // === 新增：定义监听器变量 ===
+  StreamSubscription? _scanResultsSubscription;
+  StreamSubscription? _isScanningSubscription;
+  StreamSubscription? _adapterStateSubscription;
+  StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
   bool _isScanning = false;
   bool _isConnected = false;
   bool _showOtherDevices = false;
@@ -42,6 +47,10 @@ class _HomeTabState extends State<HomeTab> {
 
   @override
   void dispose() {
+    // === 新增：取消所有蓝牙监听 ===
+    _scanResultsSubscription?.cancel();
+    _isScanningSubscription?.cancel();
+    _adapterStateSubscription?.cancel();
     _dataTimer?.cancel();
     _dataSubscription?.cancel();
     super.dispose();
@@ -111,50 +120,111 @@ class _HomeTabState extends State<HomeTab> {
       print('Stop scan error: $e');
     }
   }
+// 在 _HomeTabState 类中定义变量
+  bool _isConnecting = false;
 
   void _connectToDevice(BluetoothDevice device) async {
+    // 1. 防抖检查：如果正在连接中，直接忽略本次点击
+    if (_isConnecting) return;
+
+    // 2. 加锁：标记为正在连接
+    if (mounted) setState(() => _isConnecting = true);
+
     try {
-      if (_connectedDevice != null) {
+      // 停止扫描
+      await FlutterBluePlus.stopScan();
+
+      // 断开旧连接 (如果存在)
+      if (_connectedDevice != null && _connectedDevice != device) {
         await _connectedDevice!.disconnect();
       }
-      await device.connect();
+
+      // 建立连接
+      await device.connect(autoConnect: false);
+
+      // Android 特有优化 (非阻塞式，即便失败也不影响连接状态)
       if (Platform.isAndroid) {
         try {
-          // 1. 请求大 MTU
+          // 请求大 MTU
           print("Requesting MTU 512...");
           await device.requestMtu(512);
           await Future.delayed(const Duration(milliseconds: 200));
-          // 2. === 新增：请求高优先级连接 (Android 必需) ===
-          // 这会将连接间隔从默认的 ~40ms 降低到 ~11ms，极大提高吞吐量，防止缓冲区堆积
+
+          // 请求高优先级连接
           print("Requesting High Priority...");
           await device.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
-          await Future.delayed(const Duration(milliseconds: 100)); // 再等一下让设置生效
+          await Future.delayed(const Duration(milliseconds: 100)); // 等待设置生效
         } catch (e) {
           print("Optimization failed: $e");
         }
       }
-      setState(() {
-        _isConnected = true;
-        _connectedDevice = device;
-      });
-      _stopScan();
-      // 连接后启动数据服务并开始记录
+
+      // 连接成功：更新状态
+      if (mounted) {
+        setState(() {
+          _isConnected = true;
+          _connectedDevice = device;
+        });
+      }
+
+      // 启动监听和服务
+      _setupConnectionStateListener(device); // 记得确保你有这个方法来处理断开逻辑
       _startDataServices();
       _startRecording();
-      device.connectionState.listen((state) {
-        print('Device connection state: $state');
-        if (state == BluetoothConnectionState.disconnected) {
+
+    } catch (e) {
+      print('Connection error: $e');
+      if (mounted) {
+        // 提示用户连接失败
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connection failed: $e')),
+        );
+        // 回滚状态
+        setState(() {
+          _isConnected = false;
+          _connectedDevice = null;
+        });
+      }
+    } finally {
+      // 3. 解锁：无论成功还是失败，最后都要释放标志位
+      if (mounted) setState(() => _isConnecting = false);
+    }
+  }
+
+  void _setupConnectionStateListener(BluetoothDevice device) {
+    // 1. 先取消可能存在的旧监听，防止重复
+    _connectionStateSubscription?.cancel();
+
+    // 2. 监听新设备的连接状态
+    _connectionStateSubscription = device.connectionState.listen((state) {
+      print('Device connection state: $state'); // 调试日志
+
+      if (state == BluetoothConnectionState.disconnected) {
+        // === 处理断开连接逻辑 ===
+
+        // 更新 UI 状态
+        if (mounted) {
           setState(() {
             _isConnected = false;
             _connectedDevice = null;
-            _stopRecording();
           });
         }
-      });
-    } catch (e) {
-      print('Connection error: $e');
-    }
+
+        // 停止录制并保存数据
+        _stopRecording();
+
+        // 关键：取消数据订阅，防止重连后数据重复！
+        // 如果这里不取消，下次连上时可能会有两个监听器同时收数据
+        _dataSubscription?.cancel();
+        _dataSubscription = null;
+
+        // 可选：断开后自动重新开始扫描
+        // _startScan();
+      }
+    });
   }
+
+// ...
 
   void _disconnectDevice() async {
     try {
@@ -185,6 +255,8 @@ class _HomeTabState extends State<HomeTab> {
           for (BluetoothCharacteristic characteristic in service.characteristics) {
             if (characteristic.uuid.toString().toLowerCase() == targetCharacteristicUuid.toLowerCase()) {
               await characteristic.setNotifyValue(true);
+              await _dataSubscription?.cancel();
+              _dataSubscription = null;
               _dataSubscription = characteristic.onValueReceived.listen((value) {
                 _handleSensorData(value);
               });
@@ -305,24 +377,43 @@ class _HomeTabState extends State<HomeTab> {
       'Gyro_Z'
     ]);
 
-    // 创建CSV文件 - 保存到Download目录
-    String downloadPath = '/storage/emulated/0/Download';
-    String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-    _csvFilePath = '$downloadPath/sensor_data_$timestamp.csv';
+    // === 修改开始：适配 iOS 路径 ===
+    String dirPath;
+    try {
+      if (Platform.isIOS) {
+        // iOS: 获取应用文档目录
+        final directory = await getApplicationDocumentsDirectory();
+        dirPath = directory.path;
+      } else {
+        // Android: 保持原有逻辑，使用下载目录
+        dirPath = '/storage/emulated/0/Download';
+      }
 
-    // 确保目录存在
-    Directory downloadDir = Directory(downloadPath);
-    if (!await downloadDir.exists()) {
-      await downloadDir.create(recursive: true);
+      String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+      _csvFilePath = '$dirPath/sensor_data_$timestamp.csv';
+
+      // 确保目录存在
+      Directory targetDir = Directory(dirPath);
+      if (!await targetDir.exists()) {
+        await targetDir.create(recursive: true);
+      }
+
+      // 定时保存数据到文件
+      _dataTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+        _saveDataToCsv();
+      });
+
+      print("开始自动记录数据到: $_csvFilePath");
+      print("记录起始时间: $_recordingStartTime");
+
+    } catch (e) {
+      print("获取存储路径失败: $e");
+      // 出错时停止记录状态
+      setState(() {
+        _isRecording = false;
+      });
     }
-
-    // 定时保存数据到文件
-    _dataTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      _saveDataToCsv();
-    });
-
-    print("开始自动记录数据到: $_csvFilePath");
-    print("记录起始时间: $_recordingStartTime");
+    // === 修改结束 ===
   }
 
   // 停止记录数据
