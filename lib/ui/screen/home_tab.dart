@@ -6,8 +6,15 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:csv/csv.dart';
-// 新增1：导入多语言工具类（路径与home_screen/history_tab保持一致）
 import '../../i18n/app_localizations.dart';
+
+// 导入滤波器和计数器工具类（请根据实际路径调整）
+import '../../utils/low_pass_filter.dart';
+import '../../utils/squat_counter.dart';
+import '../../utils/bicepcurl_counter.dart' as bc;
+
+// === 将枚举定义移到顶层 ===
+enum ConnectedSubState { waiting, showingExercise, showingSummary }
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -17,7 +24,7 @@ class HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<HomeTab> {
-  // === 新增：定义监听器变量 ===
+  // === 原有监听器变量 ===
   StreamSubscription? _scanResultsSubscription;
   StreamSubscription? _isScanningSubscription;
   StreamSubscription? _adapterStateSubscription;
@@ -36,6 +43,26 @@ class _HomeTabState extends State<HomeTab> {
   DateTime _recordingStartTime = DateTime.now();
   int _totalSamplesReceived = 0;
   double _sampleIntervalMs = 1000.0 / 104.0;
+  bool _isConnecting = false;
+
+  // === 连接后UI子状态 ===
+  ConnectedSubState _connectedSubState = ConnectedSubState.waiting;
+  String? _currentExercise;
+  String? _currentExerciseImage;
+  int? _exerciseCount;
+  bool _hasDetectedExercise = false;
+  Timer? _summaryTimer;
+
+  // === 断开连接时消息界面 ===
+  bool _showDisconnectMessage = false;
+  String _disconnectMessage = '';
+  Timer? _disconnectTimer;
+
+  // === 滤波器与计数器实例 ===
+  FirstOrderLowPassFilter? _filter;
+  SquatCounter? _squatCounter;
+  bc.ExerciseCounter? _bicepCurlCounter;
+  dynamic _activeCounter; // 当前激活的计数器
 
   @override
   void initState() {
@@ -47,21 +74,62 @@ class _HomeTabState extends State<HomeTab> {
 
   @override
   void dispose() {
-    // === 新增：取消所有蓝牙监听 ===
     _scanResultsSubscription?.cancel();
     _isScanningSubscription?.cancel();
     _adapterStateSubscription?.cancel();
     _dataTimer?.cancel();
     _dataSubscription?.cancel();
+    _connectionStateSubscription?.cancel();
+    _summaryTimer?.cancel();
+    _disconnectTimer?.cancel();
     super.dispose();
   }
 
+  // ==================== 辅助方法 ====================
+  void _resetFiltersAndCounters() {
+    _filter = FirstOrderLowPassFilter(cutoff: 5.0, fs: 104.0);
+    _squatCounter = SquatCounter();
+    _bicepCurlCounter = bc.ExerciseCounter();
+    _activeCounter = null;
+  }
+
+  void _setActiveCounter(String exerciseName) {
+    switch (exerciseName.toLowerCase()) {
+      case 'squat':
+        _activeCounter = _squatCounter;
+        break;
+      case 'bicep curl':
+        _activeCounter = _bicepCurlCounter;
+        break;
+      default:
+        _activeCounter = null;
+    }
+    _activeCounter?.resetCount();
+  }
+
+  void _resetAllState() {
+    _filter = null;
+    _squatCounter = null;
+    _bicepCurlCounter = null;
+    _activeCounter = null;
+    _connectedSubState = ConnectedSubState.waiting;
+    _currentExercise = null;
+    _currentExerciseImage = null;
+    _exerciseCount = null;
+    _hasDetectedExercise = false;
+    _showDisconnectMessage = false;
+    _disconnectMessage = '';
+    _summaryTimer?.cancel();
+    _summaryTimer = null;
+    _disconnectTimer?.cancel();
+    _disconnectTimer = null;
+  }
+
+  // ==================== 原有方法 ====================
   Future<void> _requestPermissions() async {
-    // 请求存储权限
     if (await Permission.storage.isGranted == false) {
       await Permission.storage.request();
     }
-    // 请求管理外部存储权限（Android 10+）
     if (await Permission.manageExternalStorage.isGranted == false) {
       await Permission.manageExternalStorage.request();
     }
@@ -75,6 +143,7 @@ class _HomeTabState extends State<HomeTab> {
           _isConnected = true;
           _connectedDevice = connectedDevices.first;
         });
+        _resetFiltersAndCounters();
         _startDataServices();
       }
     } catch (e) {
@@ -101,6 +170,7 @@ class _HomeTabState extends State<HomeTab> {
           _connectedDevice = null;
           _stopRecording();
         });
+        _resetAllState();
       }
     });
   }
@@ -120,46 +190,33 @@ class _HomeTabState extends State<HomeTab> {
       print('Stop scan error: $e');
     }
   }
-// 在 _HomeTabState 类中定义变量
-  bool _isConnecting = false;
 
   void _connectToDevice(BluetoothDevice device) async {
-    // 1. 防抖检查：如果正在连接中，直接忽略本次点击
     if (_isConnecting) return;
-
-    // 2. 加锁：标记为正在连接
     if (mounted) setState(() => _isConnecting = true);
 
     try {
-      // 停止扫描
       await FlutterBluePlus.stopScan();
-
-      // 断开旧连接 (如果存在)
       if (_connectedDevice != null && _connectedDevice != device) {
         await _connectedDevice!.disconnect();
       }
-
-      // 建立连接
       await device.connect(autoConnect: false);
 
-      // Android 特有优化 (非阻塞式，即便失败也不影响连接状态)
       if (Platform.isAndroid) {
         try {
-          // 请求大 MTU
           print("Requesting MTU 512...");
           await device.requestMtu(512);
           await Future.delayed(const Duration(milliseconds: 200));
-
-          // 请求高优先级连接
           print("Requesting High Priority...");
           await device.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
-          await Future.delayed(const Duration(milliseconds: 100)); // 等待设置生效
+          await Future.delayed(const Duration(milliseconds: 100));
         } catch (e) {
           print("Optimization failed: $e");
         }
       }
 
-      // 连接成功：更新状态
+      _resetFiltersAndCounters();
+
       if (mounted) {
         setState(() {
           _isConnected = true;
@@ -167,83 +224,85 @@ class _HomeTabState extends State<HomeTab> {
         });
       }
 
-      // 启动监听和服务
-      _setupConnectionStateListener(device); // 记得确保你有这个方法来处理断开逻辑
+      _setupConnectionStateListener(device);
       _startDataServices();
       _startRecording();
 
     } catch (e) {
       print('Connection error: $e');
       if (mounted) {
-        // 提示用户连接失败
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Connection failed: $e')),
         );
-        // 回滚状态
         setState(() {
           _isConnected = false;
           _connectedDevice = null;
         });
       }
     } finally {
-      // 3. 解锁：无论成功还是失败，最后都要释放标志位
       if (mounted) setState(() => _isConnecting = false);
     }
   }
 
   void _setupConnectionStateListener(BluetoothDevice device) {
-    // 1. 先取消可能存在的旧监听，防止重复
     _connectionStateSubscription?.cancel();
-
-    // 2. 监听新设备的连接状态
     _connectionStateSubscription = device.connectionState.listen((state) {
-      print('Device connection state: $state'); // 调试日志
-
+      print('Device connection state: $state');
       if (state == BluetoothConnectionState.disconnected) {
-        // === 处理断开连接逻辑 ===
-
-        // 更新 UI 状态
         if (mounted) {
           setState(() {
             _isConnected = false;
             _connectedDevice = null;
           });
         }
-
-        // 停止录制并保存数据
         _stopRecording();
-
-        // 关键：取消数据订阅，防止重连后数据重复！
-        // 如果这里不取消，下次连上时可能会有两个监听器同时收数据
         _dataSubscription?.cancel();
         _dataSubscription = null;
-
-        // 可选：断开后自动重新开始扫描
-        // _startScan();
+        _resetAllState();
       }
     });
   }
 
-// ...
+  void _disconnectDevice() {
+    if (_showDisconnectMessage) return;
+    _summaryTimer?.cancel();
+    _summaryTimer = null;
 
-  void _disconnectDevice() async {
+    setState(() {
+      _showDisconnectMessage = true;
+      _disconnectMessage = _hasDetectedExercise
+          ? 'Exercises have been recorded'
+          : 'No exercise detected';
+    });
+
+    _disconnectTimer?.cancel();
+    _disconnectTimer = Timer(const Duration(seconds: 3), () {
+      _performDisconnect();
+    });
+  }
+
+  Future<void> _performDisconnect() async {
     try {
       await FlutterBluePlus.stopScan();
       _stopRecording();
       if (_connectedDevice != null) {
         await _connectedDevice!.disconnect();
       }
-      setState(() {
-        _isConnected = false;
-        _connectedDevice = null;
-        _devices.clear();
-      });
     } catch (e) {
       print('Disconnect error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isConnected = false;
+          _connectedDevice = null;
+          _devices.clear();
+          _resetAllState();
+        });
+      }
+      _disconnectTimer = null;
     }
   }
 
-  // 启动数据服务
   void _startDataServices() async {
     if (_connectedDevice == null) return;
     try {
@@ -267,8 +326,6 @@ class _HomeTabState extends State<HomeTab> {
         }
       }
       print("未找到目标服务或特征值");
-      // 调试信息
-      print("可用的服务:");
       for (BluetoothService service in services) {
         print("服务 UUID: ${service.uuid}");
         for (BluetoothCharacteristic char in service.characteristics) {
@@ -280,7 +337,6 @@ class _HomeTabState extends State<HomeTab> {
     }
   }
 
-  // 处理传感器数据 - 根据Zephyr代码的数据格式进行解析
   void _handleSensorData(List<int> data) {
     if (data.isEmpty) return;
 
@@ -288,24 +344,19 @@ class _HomeTabState extends State<HomeTab> {
       ByteData byteData = ByteData.sublistView(Uint8List.fromList(data));
       int offset = 0;
 
-      // 读取样本计数
       int sampleCount = byteData.getUint8(offset);
       offset += 1;
 
-      // 验证数据长度
       int expectedLength = 1 + sampleCount * 24;
       if (data.length != expectedLength) {
         print("数据长度不匹配: 期望 $expectedLength, 实际 ${data.length}");
         return;
       }
 
-      // 解析每个样本
       for (int i = 0; i < sampleCount; i++) {
-        // 使用固定频率计算时间戳，避免时间回退
         int sampleOffsetMs = (_totalSamplesReceived * _sampleIntervalMs).round();
         DateTime sampleTime = _recordingStartTime.add(Duration(milliseconds: sampleOffsetMs));
 
-        // 读取加速度数据
         double accelX = byteData.getFloat32(offset, Endian.little);
         offset += 4;
         double accelY = byteData.getFloat32(offset, Endian.little);
@@ -313,7 +364,6 @@ class _HomeTabState extends State<HomeTab> {
         double accelZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 读取陀螺仪数据
         double gyroX = byteData.getFloat32(offset, Endian.little);
         offset += 4;
         double gyroY = byteData.getFloat32(offset, Endian.little);
@@ -321,7 +371,20 @@ class _HomeTabState extends State<HomeTab> {
         double gyroZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 添加到数据列表
+        // 对 Z 轴加速度进行滤波
+        _filter ??= FirstOrderLowPassFilter();
+        double filteredZ = _filter!.filterSingle(accelZ, 'z');
+
+        // 如果当前有激活的计数器，传入滤波后的值进行计数
+        if (_activeCounter != null) {
+          if (_activeCounter is SquatCounter) {
+            (_activeCounter as SquatCounter).countBySingleAxis(filteredZ);
+          } else if (_activeCounter is bc.ExerciseCounter) {
+            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(filteredZ);
+          }
+        }
+
+        // 保存原始数据到 CSV
         _sensorData.add([
           sampleTime.toIso8601String(),
           accelX.toStringAsFixed(6),
@@ -339,7 +402,6 @@ class _HomeTabState extends State<HomeTab> {
 
     } catch (e) {
       print("解析传感器数据错误: $e");
-      // 如果解析失败，使用当前时间保存原始数据
       String dataString = String.fromCharCodes(data);
       _sensorData.add([
         DateTime.now().toIso8601String(),
@@ -355,7 +417,6 @@ class _HomeTabState extends State<HomeTab> {
     setState(() {});
   }
 
-  // 开始记录数据 - 自动开始，不显示控制界面
   void _startRecording() async {
     if (_isRecording) return;
 
@@ -363,10 +424,9 @@ class _HomeTabState extends State<HomeTab> {
       _isRecording = true;
       _sensorData.clear();
       _totalSamplesReceived = 0;
-      _recordingStartTime = DateTime.now(); // 重置起始时间
+      _recordingStartTime = DateTime.now();
     });
 
-    // 添加CSV表头
     _sensorData.add([
       'Timestamp',
       'Acceleration_X',
@@ -377,28 +437,23 @@ class _HomeTabState extends State<HomeTab> {
       'Gyro_Z'
     ]);
 
-    // === 修改开始：适配 iOS 路径 ===
     String dirPath;
     try {
       if (Platform.isIOS) {
-        // iOS: 获取应用文档目录
         final directory = await getApplicationDocumentsDirectory();
         dirPath = directory.path;
       } else {
-        // Android: 保持原有逻辑，使用下载目录
         dirPath = '/storage/emulated/0/Download';
       }
 
       String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
       _csvFilePath = '$dirPath/sensor_data_$timestamp.csv';
 
-      // 确保目录存在
       Directory targetDir = Directory(dirPath);
       if (!await targetDir.exists()) {
         await targetDir.create(recursive: true);
       }
 
-      // 定时保存数据到文件
       _dataTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
         _saveDataToCsv();
       });
@@ -408,15 +463,12 @@ class _HomeTabState extends State<HomeTab> {
 
     } catch (e) {
       print("获取存储路径失败: $e");
-      // 出错时停止记录状态
       setState(() {
         _isRecording = false;
       });
     }
-    // === 修改结束 ===
   }
 
-  // 停止记录数据
   void _stopRecording() {
     if (!_isRecording) return;
     _dataTimer?.cancel();
@@ -424,12 +476,11 @@ class _HomeTabState extends State<HomeTab> {
     _saveDataToCsv();
     setState(() {
       _isRecording = false;
-      _totalSamplesReceived = 0; // 重置样本计数
+      _totalSamplesReceived = 0;
     });
     print("停止记录数据，文件保存在: $_csvFilePath");
     print("总记录样本数: $_totalSamplesReceived");
 
-    // 显示保存成功的提示
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('数据已保存到: $_csvFilePath'),
@@ -438,7 +489,6 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  // 保存数据到CSV文件
   void _saveDataToCsv() async {
     if (_sensorData.isEmpty) return;
     try {
@@ -458,26 +508,254 @@ class _HomeTabState extends State<HomeTab> {
     });
   }
 
+  // ==================== 预留运动检测接口 ====================
+  void _onExerciseDetected(String exerciseName) {
+    String imagePath;
+    switch (exerciseName.toLowerCase()) {
+      case 'bicep curl':
+        imagePath = 'assets/images/bicepcurl.png';
+        break;
+      case 'bench press':
+        imagePath = 'assets/images/Bench press.png';
+        break;
+      case 'running':
+        imagePath = 'assets/images/Running.png';
+        break;
+      case 'sit-up':
+        imagePath = 'assets/images/Sit-up.png';
+        break;
+      case 'squat':
+        imagePath = 'assets/images/Squat.png';
+        break;
+      default:
+        imagePath = 'assets/images/Identify.png';
+    }
+
+    _setActiveCounter(exerciseName);
+
+    setState(() {
+      _currentExercise = exerciseName;
+      _currentExerciseImage = imagePath;
+      _connectedSubState = ConnectedSubState.showingExercise;
+      _hasDetectedExercise = true;
+    });
+
+    _summaryTimer?.cancel();
+    _summaryTimer = null;
+  }
+
+  void _onExerciseStopped() {
+    int count = 0;
+    if (_activeCounter != null) {
+      if (_activeCounter is SquatCounter) {
+        count = (_activeCounter as SquatCounter).count;
+      } else if (_activeCounter is bc.ExerciseCounter) {
+        count = (_activeCounter as bc.ExerciseCounter).count;
+      }
+    }
+
+    setState(() {
+      _exerciseCount = count;
+      _connectedSubState = ConnectedSubState.showingSummary;
+    });
+
+    _summaryTimer?.cancel();
+    _summaryTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() {
+          _connectedSubState = ConnectedSubState.waiting;
+          _currentExercise = null;
+          _currentExerciseImage = null;
+          _exerciseCount = null;
+        });
+      }
+    });
+  }
+  // =========================================================
+
   @override
   Widget build(BuildContext context) {
-    // 新增2：获取多语言实例（仅添加这一行）
     final loc = AppLocalizations.of(context);
-    // 原有代码：传递loc到_buildBody
     return _buildBody(loc);
   }
 
-  // 新增3：_buildBody方法添加loc参数
   Widget _buildBody(AppLocalizations loc) {
+    if (_showDisconnectMessage) {
+      return _buildDisconnectMessage(loc);
+    }
     if (_isConnected) {
-      // 传递loc到_buildConnectedState
       return _buildConnectedState(loc);
     } else {
-      // 传递loc到_buildDisconnectedState
       return _buildDisconnectedState(loc);
     }
   }
 
-  // 新增4：_buildDisconnectedState方法添加loc参数
+  Widget _buildDisconnectMessage(AppLocalizations loc) {
+    return Center(
+      child: Text(
+        _disconnectMessage,
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  Widget _buildConnectedState(AppLocalizations loc) {
+    switch (_connectedSubState) {
+      case ConnectedSubState.waiting:
+        return _buildWaitingState(loc);
+      case ConnectedSubState.showingExercise:
+        return _buildExerciseDisplayState(loc);
+      case ConnectedSubState.showingSummary:
+        return _buildSummaryState(loc);
+    }
+  }
+
+  Widget _buildWaitingState(AppLocalizations loc) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                loc.translate('deviceConnected'),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                loc.translate('exerciseIdentifying'),
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Image.asset(
+                'assets/images/Identify.png',
+                width: 120,
+                height: 120,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 40),
+        Center(
+          child: ElevatedButton(
+            onPressed: _disconnectDevice,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+            ),
+            child: Text(
+              loc.translate('disconnect'),
+              style: const TextStyle(fontSize: 16),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildExerciseDisplayState(AppLocalizations loc) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (_currentExercise != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16.0),
+            child: Text(
+              _currentExercise!,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        if (_currentExerciseImage != null)
+          Image.asset(
+            _currentExerciseImage!,
+            width: 200,
+            height: 200,
+            fit: BoxFit.contain,
+          ),
+        const SizedBox(height: 40),
+        ElevatedButton(
+          onPressed: _disconnectDevice,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+          ),
+          child: Text(
+            loc.translate('disconnect'),
+            style: const TextStyle(fontSize: 16),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryState(AppLocalizations loc) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 20.0),
+              child: Image.asset(
+                _currentExerciseImage ?? 'assets/images/Identify.png',
+                width: 100,
+                height: 100,
+                fit: BoxFit.contain,
+              ),
+            ),
+            const SizedBox(width: 20),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _currentExercise ?? '',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${loc.translate('repetitions')}: ${_exerciseCount ?? 0}',
+                  style: const TextStyle(fontSize: 16),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 40),
+        ElevatedButton(
+          onPressed: _disconnectDevice,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+          ),
+          child: Text(
+            loc.translate('disconnect'),
+            style: const TextStyle(fontSize: 16),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildDisconnectedState(AppLocalizations loc) {
     List<BluetoothDevice> myFitnessPodDevices = _devices.where((device) {
       String name = device.platformName;
@@ -488,15 +766,12 @@ class _HomeTabState extends State<HomeTab> {
       return name.isEmpty || !name.toLowerCase().contains("myfitnesspod");
     }).toList();
     if (_devices.isNotEmpty) {
-      // 传递loc到_buildDeviceListState
       return _buildDeviceListState(loc, myFitnessPodDevices, otherDevices);
     } else {
-      // 传递loc到_buildSearchState
       return _buildSearchState(loc);
     }
   }
 
-  // 新增5：_buildSearchState方法添加loc参数，替换固定文本
   Widget _buildSearchState(AppLocalizations loc) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -515,7 +790,6 @@ class _HomeTabState extends State<HomeTab> {
                   height: 120,
                 ),
                 const SizedBox(height: 20),
-                // 替换：Scanning... / Search devices
                 Text(
                   _isScanning ? loc.translate('scanning') : loc.translate('searchDevices'),
                   style: const TextStyle(
@@ -531,7 +805,6 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  // 新增6：_buildDeviceListState方法添加loc参数
   Widget _buildDeviceListState(AppLocalizations loc, List<BluetoothDevice> myFitnessPodDevices, List<BluetoothDevice> otherDevices) {
     return Column(
       children: [
@@ -542,7 +815,6 @@ class _HomeTabState extends State<HomeTab> {
             child: IconButton(
               icon: const Icon(Icons.arrow_back),
               onPressed: _goBack,
-              // 替换：Back to search
               tooltip: loc.translate('backToSearch'),
             ),
           ),
@@ -551,7 +823,6 @@ class _HomeTabState extends State<HomeTab> {
           child: Column(
             children: [
               if (myFitnessPodDevices.isNotEmpty)
-              // 传递loc到_buildDeviceSection，替换title
                 _buildDeviceSection(
                   loc: loc,
                   title: loc.translate('myFitnessPod'),
@@ -560,12 +831,10 @@ class _HomeTabState extends State<HomeTab> {
                   iconColor: Colors.blue,
                 ),
               if (otherDevices.isNotEmpty)
-              // 传递loc到_buildOtherDevicesSection
                 _buildOtherDevicesSection(loc, otherDevices),
               if (myFitnessPodDevices.isEmpty && otherDevices.isEmpty)
                 Expanded(
                   child: Center(
-                    // 替换：No devices found
                     child: Text(
                       loc.translate('noDevicesFound'),
                       style: const TextStyle(
@@ -582,9 +851,8 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  // 新增7：_buildDeviceSection方法添加loc参数，替换Connect按钮
   Widget _buildDeviceSection({
-    required AppLocalizations loc, // 新增loc参数
+    required AppLocalizations loc,
     required String title,
     required List<BluetoothDevice> devices,
     required IconData icon,
@@ -625,7 +893,6 @@ class _HomeTabState extends State<HomeTab> {
                 subtitle: Text(device.remoteId.str),
                 trailing: ElevatedButton(
                   onPressed: () => _connectToDevice(device),
-                  // 替换：Connect
                   child: Text(loc.translate('connect')),
                 ),
               );
@@ -636,18 +903,15 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  // 新增8：_buildOtherDevicesSection方法添加loc参数，替换固定文本
   Widget _buildOtherDevicesSection(AppLocalizations loc, List<BluetoothDevice> otherDevices) {
     return Card(
       margin: const EdgeInsets.all(16.0),
       child: ExpansionTile(
-        // 只保留左边的箭头，移除右边的箭头
-        trailing: const SizedBox.shrink(), // 这将移除右边的箭头
+        trailing: const SizedBox.shrink(),
         leading: Icon(
           _showOtherDevices ? Icons.expand_more : Icons.chevron_right,
           color: Colors.grey,
         ),
-        // 替换：Other Devices
         title: Text(
           loc.translate('otherDevices'),
           style: const TextStyle(
@@ -663,25 +927,22 @@ class _HomeTabState extends State<HomeTab> {
           });
         },
         children: [
-          // 限制列表高度，允许滚动
           Container(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.4, // 限制最大高度
+              maxHeight: MediaQuery.of(context).size.height * 0.4,
             ),
             child: ListView.builder(
               shrinkWrap: true,
-              physics: const ClampingScrollPhysics(), // 使用ClampingScrollPhysics允许滚动
+              physics: const ClampingScrollPhysics(),
               itemCount: otherDevices.length,
               itemBuilder: (context, index) {
                 final device = otherDevices[index];
                 return ListTile(
                   leading: const Icon(Icons.bluetooth),
-                  // 替换：Unknown Device
                   title: Text(device.platformName.isEmpty ? loc.translate('unknownDevice') : device.platformName),
                   subtitle: Text(device.remoteId.str),
                   trailing: ElevatedButton(
                     onPressed: () => _connectToDevice(device),
-                    // 替换：Connect
                     child: Text(loc.translate('connect')),
                   ),
                 );
@@ -690,65 +951,6 @@ class _HomeTabState extends State<HomeTab> {
           ),
         ],
       ),
-    );
-  }
-
-  // 新增9：_buildConnectedState方法添加loc参数，替换固定文本
-  Widget _buildConnectedState(AppLocalizations loc) {
-    // 移除数据记录控制区域，保持原来的界面
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // 替换：Device connected
-              Text(
-                loc.translate('deviceConnected'),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 8),
-              // 替换：Exercise Identifying...
-              Text(
-                loc.translate('exerciseIdentifying'),
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 20),
-              Image.asset(
-                'assets/images/Identify.png',
-                width: 120,
-                height: 120,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 40),
-        Center(
-          child: ElevatedButton(
-            onPressed: _disconnectDevice,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
-            ),
-            // 替换：Disconnect
-            child: Text(
-              loc.translate('disconnect'),
-              style: TextStyle(fontSize: 16),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

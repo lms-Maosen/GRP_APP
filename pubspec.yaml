@@ -11,6 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  tflite_flutter: ^0.10.3
   flutter_blue_plus: ^1.30.0  # 添加这一行
   path_provider: ^2.1.1
   permission_handler: ^11.0.0
@@ -33,4 +34,5 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/models/miniresnet_model.tflite
     - i18n/
