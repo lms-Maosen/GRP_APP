@@ -11,7 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  tflite_flutter: ^0.10.3
+  tflite_flutter: ^0.12.1
   flutter_blue_plus: ^1.30.0  # 添加这一行
   path_provider: ^2.1.1
   permission_handler: ^11.0.0

@@ -8,13 +8,58 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:csv/csv.dart';
 import '../../i18n/app_localizations.dart';
 
-// 导入滤波器和计数器工具类（请根据实际路径调整）
-import '../../utils/low_pass_filter.dart';
-import '../../utils/squat_counter.dart';
+// 导入二头弯举计数器（仍保留）
 import '../../utils/bicepcurl_counter.dart' as bc;
 
-// === 将枚举定义移到顶层 ===
+// 导入 TensorFlow Lite 解释器
+import 'package:tflite_flutter/tflite_flutter.dart';
+
+// 连接后UI子状态枚举
 enum ConnectedSubState { waiting, showingExercise, showingSummary }
+
+// ==================== 移动平均滤波器（三点平均） ====================
+class _MovingAverageFilter {
+  final List<double> _buffer = [];
+  final int _windowSize = 3;
+
+  double filter(double newValue) {
+    _buffer.add(newValue);
+    if (_buffer.length > _windowSize) {
+      _buffer.removeAt(0);
+    }
+    if (_buffer.length < _windowSize) {
+      return newValue;
+    }
+    return _buffer.reduce((a, b) => a + b) / _windowSize;
+  }
+
+  void reset() {
+    _buffer.clear();
+  }
+}
+
+// ==================== 蹲起计数器（基于阈值6.5） ====================
+class _SquatCounter {
+  int _count = 0;
+  bool _isInSquat = false;
+  final double threshold = 6.5;
+
+  int get count => _count;
+
+  void addSample(double filteredValue) {
+    if (filteredValue < threshold && !_isInSquat) {
+      _isInSquat = true;
+    } else if (filteredValue > threshold && _isInSquat) {
+      _count++;
+      _isInSquat = false;
+    }
+  }
+
+  void reset() {
+    _count = 0;
+    _isInSquat = false;
+  }
+}
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -24,7 +69,7 @@ class HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<HomeTab> {
-  // === 原有监听器变量 ===
+  // ==================== 蓝牙相关变量 ====================
   StreamSubscription? _scanResultsSubscription;
   StreamSubscription? _isScanningSubscription;
   StreamSubscription? _adapterStateSubscription;
@@ -35,7 +80,6 @@ class _HomeTabState extends State<HomeTab> {
   bool _isRecording = false;
   List<BluetoothDevice> _devices = [];
   BluetoothDevice? _connectedDevice;
-  // 数据记录相关变量
   List<List<dynamic>> _sensorData = [];
   Timer? _dataTimer;
   StreamSubscription<List<int>>? _dataSubscription;
@@ -45,25 +89,37 @@ class _HomeTabState extends State<HomeTab> {
   double _sampleIntervalMs = 1000.0 / 104.0;
   bool _isConnecting = false;
 
-  // === 连接后UI子状态 ===
+  // ==================== UI状态变量 ====================
   ConnectedSubState _connectedSubState = ConnectedSubState.waiting;
   String? _currentExercise;
   String? _currentExerciseImage;
   int? _exerciseCount;
   bool _hasDetectedExercise = false;
   Timer? _summaryTimer;
-
-  // === 断开连接时消息界面 ===
   bool _showDisconnectMessage = false;
   String _disconnectMessage = '';
   Timer? _disconnectTimer;
 
-  // === 滤波器与计数器实例 ===
-  FirstOrderLowPassFilter? _filter;
-  SquatCounter? _squatCounter;
+  // ==================== 滤波与计数器 ====================
+  _MovingAverageFilter? _filter;
+  _SquatCounter? _squatCounter;
   bc.ExerciseCounter? _bicepCurlCounter;
   dynamic _activeCounter; // 当前激活的计数器
 
+  // ==================== TFLite 模型相关 ====================
+  Interpreter? _interpreter;
+  List<String> _labels = [];
+  List<List<double>> _sensorWindow = [];
+  final int _windowSize = 208;  // 根据模型实际输入调整（1248 / 6 = 208）
+  final int _inferenceInterval = 10;
+  int _sampleCounterForInference = 0;
+
+  String? _currentInferredExercise;
+  int _stableCount = 0;
+  final int _stableThreshold = 3;
+  final double _confidenceThreshold = 0.7;
+
+  // ==================== 初始化与销毁 ====================
   @override
   void initState() {
     super.initState();
@@ -82,13 +138,14 @@ class _HomeTabState extends State<HomeTab> {
     _connectionStateSubscription?.cancel();
     _summaryTimer?.cancel();
     _disconnectTimer?.cancel();
+    _interpreter?.close();
     super.dispose();
   }
 
   // ==================== 辅助方法 ====================
   void _resetFiltersAndCounters() {
-    _filter = FirstOrderLowPassFilter(cutoff: 5.0, fs: 104.0);
-    _squatCounter = SquatCounter();
+    _filter = _MovingAverageFilter();
+    _squatCounter = _SquatCounter();
     _bicepCurlCounter = bc.ExerciseCounter();
     _activeCounter = null;
   }
@@ -104,7 +161,7 @@ class _HomeTabState extends State<HomeTab> {
       default:
         _activeCounter = null;
     }
-    _activeCounter?.resetCount();
+    _activeCounter?.reset();
   }
 
   void _resetAllState() {
@@ -123,9 +180,87 @@ class _HomeTabState extends State<HomeTab> {
     _summaryTimer = null;
     _disconnectTimer?.cancel();
     _disconnectTimer = null;
+
+    _sensorWindow.clear();
+    _sampleCounterForInference = 0;
+    _currentInferredExercise = null;
+    _stableCount = 0;
   }
 
-  // ==================== 原有方法 ====================
+  // ==================== 模型加载 ====================
+  Future<void> _loadModel() async {
+    try {
+      _interpreter = await Interpreter.fromAsset('assets/models/miniresnet_model.tflite');
+      print('✅ 模型加载成功');
+      // 打印输入张量信息
+      var inputTensors = _interpreter!.getInputTensors();
+      print('模型输入张量: $inputTensors');
+      _labels = ['squat', 'other'];
+    } catch (e) {
+      print('❌ 模型加载失败: $e');
+    }
+  }
+
+  // ==================== 运动推理 ====================
+  void _runInference() {
+    if (_interpreter == null) return;
+    if (_sensorWindow.length < _windowSize) return;
+
+    try {
+      List<double> flatten = [];
+      for (var sample in _sensorWindow) {
+        flatten.addAll(sample);
+      }
+      Float32List input = Float32List.fromList(flatten);
+
+      var output = List.filled(1 * _labels.length, 0.0).reshape([1, _labels.length]);
+
+      _interpreter!.run(input, output);
+
+      List<double> probabilities = output[0] as List<double>;
+      int maxIndex = 0;
+      double maxProb = probabilities[0];
+      for (int i = 1; i < probabilities.length; i++) {
+        if (probabilities[i] > maxProb) {
+          maxProb = probabilities[i];
+          maxIndex = i;
+        }
+      }
+
+      String detectedExercise = _labels[maxIndex];
+      // print('📊 推理结果: $detectedExercise, 置信度: ${maxProb.toStringAsFixed(3)}');
+
+      if (maxProb > _confidenceThreshold) {
+        if (_currentInferredExercise == detectedExercise) {
+          _stableCount++;
+          // print('📈 连续相同运动次数: $_stableCount');
+        } else {
+          _currentInferredExercise = detectedExercise;
+          _stableCount = 1;
+          // print('🔄 运动变化为新运动: $detectedExercise');
+        }
+
+        if (_stableCount >= _stableThreshold && _connectedSubState == ConnectedSubState.waiting) {
+          // print('🎯 触发运动开始: $detectedExercise');
+          _onExerciseDetected(detectedExercise);
+        }
+      } else {
+        // print('⬇️ 置信度低于阈值，视为无运动');
+        if (_currentInferredExercise != null) {
+          // print('🏁 之前有运动，现在结束');
+          _stableCount = 0;
+          _currentInferredExercise = null;
+          if (_connectedSubState != ConnectedSubState.waiting) {
+            _onExerciseStopped();
+          }
+        }
+      }
+    } catch (e) {
+      print('推理内部错误: $e');
+    }
+  }
+
+  // ==================== 蓝牙相关方法 ====================
   Future<void> _requestPermissions() async {
     if (await Permission.storage.isGranted == false) {
       await Permission.storage.request();
@@ -145,6 +280,7 @@ class _HomeTabState extends State<HomeTab> {
         });
         _resetFiltersAndCounters();
         _startDataServices();
+        _loadModel();
       }
     } catch (e) {
       print('Error checking current connections: $e');
@@ -227,6 +363,7 @@ class _HomeTabState extends State<HomeTab> {
       _setupConnectionStateListener(device);
       _startDataServices();
       _startRecording();
+      _loadModel();
 
     } catch (e) {
       print('Connection error: $e');
@@ -337,6 +474,7 @@ class _HomeTabState extends State<HomeTab> {
     }
   }
 
+  // ==================== 数据处理（修改：隔离推理异常，避免乱码） ====================
   void _handleSensorData(List<int> data) {
     if (data.isEmpty) return;
 
@@ -371,16 +509,33 @@ class _HomeTabState extends State<HomeTab> {
         double gyroZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 对 Z 轴加速度进行滤波
-        _filter ??= FirstOrderLowPassFilter();
-        double filteredZ = _filter!.filterSingle(accelZ, 'z');
+        // 使用移动平均滤波器对 Z 轴加速度进行滤波
+        _filter ??= _MovingAverageFilter();
+        double filteredZ = _filter!.filter(accelZ);
 
-        // 如果当前有激活的计数器，传入滤波后的值进行计数
+        // 计数逻辑
         if (_activeCounter != null) {
-          if (_activeCounter is SquatCounter) {
-            (_activeCounter as SquatCounter).countBySingleAxis(filteredZ);
+          if (_activeCounter is _SquatCounter) {
+            (_activeCounter as _SquatCounter).addSample(filteredZ);
           } else if (_activeCounter is bc.ExerciseCounter) {
             (_activeCounter as bc.ExerciseCounter).countBySingleAxis(filteredZ);
+          }
+        }
+
+        // 将原始6维数据加入滑动窗口（用于模型推理）
+        _sensorWindow.add([accelX, accelY, accelZ, gyroX, gyroY, gyroZ]);
+        if (_sensorWindow.length > _windowSize) {
+          _sensorWindow.removeAt(0);
+        }
+
+        // 定期进行推理，并捕获推理异常，不影响数据记录
+        _sampleCounterForInference++;
+        if (_sampleCounterForInference >= _inferenceInterval && _sensorWindow.length == _windowSize) {
+          _sampleCounterForInference = 0;
+          try {
+            _runInference();
+          } catch (e) {
+            print('推理异常（已忽略）: $e');
           }
         }
 
@@ -402,21 +557,22 @@ class _HomeTabState extends State<HomeTab> {
 
     } catch (e) {
       print("解析传感器数据错误: $e");
-      String dataString = String.fromCharCodes(data);
+      // 不保存原始二进制数据，只记录错误标记，保持 CSV 列数一致
       _sensorData.add([
         DateTime.now().toIso8601String(),
-        dataString,
-        '解析错误',
-        '解析错误',
-        '解析错误',
-        '解析错误',
-        '解析错误',
+        'PARSE_ERROR',
+        'PARSE_ERROR',
+        'PARSE_ERROR',
+        'PARSE_ERROR',
+        'PARSE_ERROR',
+        'PARSE_ERROR',
       ]);
     }
 
     setState(() {});
   }
 
+  // ==================== 记录与保存 ====================
   void _startRecording() async {
     if (_isRecording) return;
 
@@ -508,7 +664,7 @@ class _HomeTabState extends State<HomeTab> {
     });
   }
 
-  // ==================== 预留运动检测接口 ====================
+  // ==================== 运动检测接口 ====================
   void _onExerciseDetected(String exerciseName) {
     String imagePath;
     switch (exerciseName.toLowerCase()) {
@@ -547,8 +703,8 @@ class _HomeTabState extends State<HomeTab> {
   void _onExerciseStopped() {
     int count = 0;
     if (_activeCounter != null) {
-      if (_activeCounter is SquatCounter) {
-        count = (_activeCounter as SquatCounter).count;
+      if (_activeCounter is _SquatCounter) {
+        count = (_activeCounter as _SquatCounter).count;
       } else if (_activeCounter is bc.ExerciseCounter) {
         count = (_activeCounter as bc.ExerciseCounter).count;
       }
@@ -571,8 +727,8 @@ class _HomeTabState extends State<HomeTab> {
       }
     });
   }
-  // =========================================================
 
+  // ==================== UI构建 ====================
   @override
   Widget build(BuildContext context) {
     final loc = AppLocalizations.of(context);
