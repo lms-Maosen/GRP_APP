@@ -7,7 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:csv/csv.dart';
 import '../../i18n/app_localizations.dart';
-
+import 'dart:math' as math;
 // 导入二头弯举计数器（仍保留）
 import '../../utils/bicepcurl_counter.dart' as bc;
 
@@ -35,6 +35,48 @@ class _MovingAverageFilter {
 
   void reset() {
     _buffer.clear();
+  }
+}
+
+class _ButterworthFilter {
+  // 6轴数据，每轴需要独立的滤波器状态
+  static const int _numChannels = 6;
+
+  // 4阶 IIR 滤波器的系数 (由 Python scipy.signal.butter 计算得出)
+  // b: 分子系数, a: 分母系数
+  final List<double> _b = [4.82434303e-05, 1.92973721e-04, 2.89460582e-04, 1.92973721e-04, 4.82434303e-05];
+  final List<double> _a = [1.0, -3.45322477, 4.50413095, -2.62779547, 0.57714418];
+
+  // 状态缓冲区 [通道][阶数]
+  late List<List<double>> _x;
+  late List<List<double>> _y;
+
+  _ButterworthFilter() {
+    _x = List.generate(_numChannels, (_) => List.filled(5, 0.0));
+    _y = List.generate(_numChannels, (_) => List.filled(5, 0.0));
+  }
+
+  /// 输入原始 [ax, ay, az, gx, gy, gz]，输出滤波后的数据
+  List<double> filter(List<double> input) {
+    List<double> output = List.filled(_numChannels, 0.0);
+
+    for (int c = 0; c < _numChannels; c++) {
+      // 移动输入历史
+      for (int i = 4; i > 0; i--) _x[c][i] = _x[c][i - 1];
+      _x[c][0] = input[c];
+
+      // 计算差分方程: y[n] = (b[0]*x[n] + b[1]*x[n-1] + ...) - (a[1]*y[n-1] + a[2]*y[n-2] + ...)
+      double out = _b[0] * _x[c][0];
+      for (int i = 1; i <= 4; i++) {
+        out += _b[i] * _x[c][i] - _a[i] * _y[c][i];
+      }
+
+      // 移动输出历史
+      for (int i = 4; i > 1; i--) _y[c][i] = _y[c][i - 1];
+      _y[c][1] = out;
+      output[c] = out;
+    }
+    return output;
   }
 }
 
@@ -71,6 +113,7 @@ class HomeTab extends StatefulWidget {
 class _HomeTabState extends State<HomeTab> {
   // ==================== 蓝牙相关变量 ====================
   StreamSubscription? _scanResultsSubscription;
+  _ButterworthFilter? _imuFilter;
   StreamSubscription? _isScanningSubscription;
   StreamSubscription? _adapterStateSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
@@ -116,7 +159,7 @@ class _HomeTabState extends State<HomeTab> {
 
   String? _currentInferredExercise;
   int _stableCount = 0;
-  final int _stableThreshold = 3;
+  final int _stableThreshold = 5;
   final double _confidenceThreshold = 0.7;
 
   // ==================== 初始化与销毁 ====================
@@ -148,6 +191,7 @@ class _HomeTabState extends State<HomeTab> {
     _squatCounter = _SquatCounter();
     _bicepCurlCounter = bc.ExerciseCounter();
     _activeCounter = null;
+    _imuFilter = _ButterworthFilter();
   }
 
   void _setActiveCounter(String exerciseName) {
@@ -169,6 +213,7 @@ class _HomeTabState extends State<HomeTab> {
     _squatCounter = null;
     _bicepCurlCounter = null;
     _activeCounter = null;
+    _imuFilter = null;
     _connectedSubState = ConnectedSubState.waiting;
     _currentExercise = null;
     _currentExerciseImage = null;
@@ -195,10 +240,84 @@ class _HomeTabState extends State<HomeTab> {
       // 打印输入张量信息
       var inputTensors = _interpreter!.getInputTensors();
       print('模型输入张量: $inputTensors');
-      _labels = ['squat', 'other'];
+      _labels = ['rest', 'squat'];
     } catch (e) {
       print('❌ 模型加载失败: $e');
     }
+  }
+  static const List<double> _bCoeffs = [4.82434303e-05, 1.92973721e-04, 2.89460582e-04, 1.92973721e-04, 4.82434303e-05];
+  static const List<double> _aCoeffs = [1.0, -3.45322477, 4.50413095, -2.62779547, 0.57714418];
+  List<double>? _cachedZi;
+
+  /// Direct Form II Transposed，支持初始条件
+  List<double> _lfilterDF2T(List<double> x, [List<double>? zi]) {
+    int n = x.length;
+    List<double> y = List.filled(n, 0.0);
+    List<double> z = zi != null ? List.from(zi) : List.filled(4, 0.0);
+
+    for (int i = 0; i < n; i++) {
+      y[i] = _bCoeffs[0] * x[i] + z[0];
+      z[0] = _bCoeffs[1] * x[i] - _aCoeffs[1] * y[i] + z[1];
+      z[1] = _bCoeffs[2] * x[i] - _aCoeffs[2] * y[i] + z[2];
+      z[2] = _bCoeffs[3] * x[i] - _aCoeffs[3] * y[i] + z[3];
+      z[3] = _bCoeffs[4] * x[i] - _aCoeffs[4] * y[i];
+    }
+    return y;
+  }
+
+  /// 计算滤波器初始条件（等效 scipy lfilter_zi）
+  List<double> _computeZi() {
+    if (_cachedZi != null) return _cachedZi!;
+    List<double> z = List.filled(4, 0.0);
+    for (int i = 0; i < 2000; i++) {
+      double yi = _bCoeffs[0] * 1.0 + z[0];
+      z[0] = _bCoeffs[1] * 1.0 - _aCoeffs[1] * yi + z[1];
+      z[1] = _bCoeffs[2] * 1.0 - _aCoeffs[2] * yi + z[2];
+      z[2] = _bCoeffs[3] * 1.0 - _aCoeffs[3] * yi + z[3];
+      z[3] = _bCoeffs[4] * 1.0 - _aCoeffs[4] * yi;
+    }
+    _cachedZi = z;
+    return z;
+  }
+
+  /// 等效 scipy.signal.filtfilt（含镜像填充 + 初始条件）
+  List<List<double>> _filtfilt(List<List<double>> window) {
+    int len = window.length;
+    int padLen = 14;
+    List<double> zi = _computeZi();
+    List<List<double>> result = List.generate(len, (_) => List.filled(6, 0.0));
+
+    for (int c = 0; c < 6; c++) {
+      List<double> col = List.generate(len, (i) => window[i][c]);
+
+      // 镜像填充
+      List<double> padded = List.filled(padLen + len + padLen, 0.0);
+      for (int i = 0; i < padLen; i++) {
+        padded[padLen - 1 - i] = 2 * col[0] - col[i + 1];
+      }
+      for (int i = 0; i < len; i++) {
+        padded[padLen + i] = col[i];
+      }
+      for (int i = 0; i < padLen; i++) {
+        padded[padLen + len + i] = 2 * col[len - 1] - col[len - 2 - i];
+      }
+
+      // 前向滤波，初始条件 = zi * 第一个样本值
+      List<double> ziF = zi.map((z) => z * padded[0]).toList();
+      List<double> forward = _lfilterDF2T(padded, ziF);
+
+      // 反转 + 反向滤波，初始条件 = zi * 反转后第一个样本值
+      List<double> rev = forward.reversed.toList();
+      List<double> ziB = zi.map((z) => z * rev[0]).toList();
+      List<double> backward = _lfilterDF2T(rev, ziB);
+
+      // 再反转，取中间部分
+      List<double> final_ = backward.reversed.toList();
+      for (int i = 0; i < len; i++) {
+        result[i][c] = final_[padLen + i];
+      }
+    }
+    return result;
   }
 
   // ==================== 运动推理 ====================
@@ -207,6 +326,9 @@ class _HomeTabState extends State<HomeTab> {
     if (_sensorWindow.length < _windowSize) return;
 
     try {
+      // 对窗口做 filtfilt（前向+反向 IIR 滤波）
+      List<List<double>> filtered = _filtfilt(_sensorWindow);
+
       List<double> flatten = [];
       for (var sample in _sensorWindow) {
         flatten.addAll(sample);
@@ -228,7 +350,7 @@ class _HomeTabState extends State<HomeTab> {
       }
 
       String detectedExercise = _labels[maxIndex];
-      // print('📊 推理结果: $detectedExercise, 置信度: ${maxProb.toStringAsFixed(3)}');
+      print('📊 推理: $detectedExercise, 置信度: ${maxProb.toStringAsFixed(3)}, 稳定计数: $_stableCount');
 
       if (maxProb > _confidenceThreshold) {
         if (_currentInferredExercise == detectedExercise) {
@@ -240,21 +362,26 @@ class _HomeTabState extends State<HomeTab> {
           // print('🔄 运动变化为新运动: $detectedExercise');
         }
 
-        if (_stableCount >= _stableThreshold && _connectedSubState == ConnectedSubState.waiting) {
-          // print('🎯 触发运动开始: $detectedExercise');
+        if (_stableCount >= _stableThreshold && _connectedSubState == ConnectedSubState.waiting && detectedExercise != 'rest') {
+          print('🎯 动作转换: waiting → $detectedExercise (连续${_stableCount}次, 置信度${maxProb.toStringAsFixed(3)})');
           _onExerciseDetected(detectedExercise);
         }
+
+        // ✅ 新增：高置信度rest也能触发结束
+        if (_stableCount >= _stableThreshold &&
+            _connectedSubState == ConnectedSubState.showingExercise &&
+            detectedExercise == 'rest') {
+          print('🏁 动作转换: $_currentExercise → rest (连续${_stableCount}次, 置信度${maxProb.toStringAsFixed(3)})');
+          _onExerciseStopped();
+        }
       } else {
-        // print('⬇️ 置信度低于阈值，视为无运动');
-        if (_currentInferredExercise != null) {
-          // print('🏁 之前有运动，现在结束');
+
+          // 低置信度时只重置计数，不立即结束运动
           _stableCount = 0;
           _currentInferredExercise = null;
-          if (_connectedSubState != ConnectedSubState.waiting) {
-            _onExerciseStopped();
-          }
         }
-      }
+
+
     } catch (e) {
       print('推理内部错误: $e');
     }
@@ -491,6 +618,9 @@ class _HomeTabState extends State<HomeTab> {
         return;
       }
 
+      // 初始化巴特沃斯滤波器
+      _imuFilter ??= _ButterworthFilter();
+
       for (int i = 0; i < sampleCount; i++) {
         int sampleOffsetMs = (_totalSamplesReceived * _sampleIntervalMs).round();
         DateTime sampleTime = _recordingStartTime.add(Duration(milliseconds: sampleOffsetMs));
@@ -509,37 +639,45 @@ class _HomeTabState extends State<HomeTab> {
         double gyroZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 使用移动平均滤波器对 Z 轴加速度进行滤波
-        _filter ??= _MovingAverageFilter();
-        double filteredZ = _filter!.filter(accelZ);
+        // --- 核心改动：执行滤波 ---
+        List<double> rawSample = [accelX, accelY, accelZ, gyroX, gyroY, gyroZ];
+        List<double> filteredSample = _imuFilter!.filter(rawSample);
 
-        // 计数逻辑
+        // 分解滤波后的数据以便后续使用
+        double fAx = filteredSample[0];
+        double fAy = filteredSample[1];
+        double fAz = filteredSample[2];
+        double fGx = filteredSample[3];
+        double fGy = filteredSample[4];
+        double fGz = filteredSample[5];
+
+        // 计数逻辑：使用滤波后的 Z 轴，更稳定
         if (_activeCounter != null) {
           if (_activeCounter is _SquatCounter) {
-            (_activeCounter as _SquatCounter).addSample(filteredZ);
+            (_activeCounter as _SquatCounter).addSample(fAz);
           } else if (_activeCounter is bc.ExerciseCounter) {
-            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(filteredZ);
+            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(fAz);
           }
         }
 
-        // 将原始6维数据加入滑动窗口（用于模型推理）
+        // 滑动窗口存原始数据，推理时再做 filtfilt
         _sensorWindow.add([accelX, accelY, accelZ, gyroX, gyroY, gyroZ]);
         if (_sensorWindow.length > _windowSize) {
           _sensorWindow.removeAt(0);
         }
 
-        // 定期进行推理，并捕获推理异常，不影响数据记录
+        // 推理逻辑保持不变，但现在输入的是干净的信号
         _sampleCounterForInference++;
         if (_sampleCounterForInference >= _inferenceInterval && _sensorWindow.length == _windowSize) {
           _sampleCounterForInference = 0;
           try {
             _runInference();
           } catch (e) {
-            print('推理异常（已忽略）: $e');
+            print('推理异常: $e');
           }
         }
 
-        // 保存原始数据到 CSV
+        // 保存原始数据到 CSV (建议存原始数据，方便出问题后回溯分析)
         _sensorData.add([
           sampleTime.toIso8601String(),
           accelX.toStringAsFixed(6),
@@ -553,22 +691,9 @@ class _HomeTabState extends State<HomeTab> {
         _totalSamplesReceived++;
       }
 
-      print("成功解析 $sampleCount 个传感器样本，总样本数: $_totalSamplesReceived");
-
     } catch (e) {
       print("解析传感器数据错误: $e");
-      // 不保存原始二进制数据，只记录错误标记，保持 CSV 列数一致
-      _sensorData.add([
-        DateTime.now().toIso8601String(),
-        'PARSE_ERROR',
-        'PARSE_ERROR',
-        'PARSE_ERROR',
-        'PARSE_ERROR',
-        'PARSE_ERROR',
-        'PARSE_ERROR',
-      ]);
     }
-
     setState(() {});
   }
 
