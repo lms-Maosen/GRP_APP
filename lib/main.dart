@@ -5,11 +5,15 @@ import 'ui/screen/home_screen.dart';
 import 'ui/theme/app_theme.dart';
 import 'i18n/app_localizations.dart';
 import 'providers/LocaleProvider.dart';
+import 'providers/history_provider.dart';
 
 void main() {
   runApp(
-    ChangeNotifierProvider(
-      create: (context) => LocaleProvider(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => LocaleProvider()),
+        ChangeNotifierProvider(create: (context) => HistoryProvider()),
+      ],
       child: const MyApp(),
     ),
   );
@@ -25,7 +29,6 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Smart Fitness Pod',
       theme: AppTheme.lightTheme,
-      // 仅新增以下多语言配置，其余代码与 branch2 完全一致
       locale: localeProvider.currentLocale,
       supportedLocales: AppLocalizations.supportedLocales,
       localizationsDelegates: const [
@@ -34,7 +37,6 @@ class MyApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      // 保留 branch2 原有首页配置
       home: const HomeScreen(username: "当前用户名"),
     );
   }

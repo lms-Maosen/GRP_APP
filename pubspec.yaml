@@ -34,5 +34,5 @@ flutter:
 
   assets:
     - assets/images/
-    - assets/models/miniresnet_model.tflite
+    - assets/models/
     - i18n/

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../i18n/app_localizations.dart';
+import 'package:provider/provider.dart';
+import '../../providers/history_provider.dart';
 
 class HistoryTab extends StatefulWidget {
   const HistoryTab({super.key});
@@ -12,12 +14,11 @@ class HistoryTab extends StatefulWidget {
 class _HistoryTabState extends State<HistoryTab> {
   @override
   Widget build(BuildContext context) {
-    // 新增：获取多语言实例
+    // 获取多语言实例
     final loc = AppLocalizations.of(context);
 
     return Scaffold(
       body: Container(
-        // 新增：设置背景颜色
         color: const Color(0xFFC168EE),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -30,13 +31,13 @@ class _HistoryTabState extends State<HistoryTab> {
                 child: ListTile(
                   leading: const Icon(Icons.history, color: Colors.blue, size: 40),
                   title: Text(
-                    loc.translate('record'), // 使用多语言翻译
+                    loc.translate('record'),
                     style: const TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  subtitle: Text(loc.translate('viewYourWorkoutRecords')), // 使用多语言翻译
+                  subtitle: Text(loc.translate('viewYourWorkoutRecords')),
                   trailing: const Icon(Icons.arrow_forward_ios),
                   onTap: () {
                     Navigator.push(
@@ -56,13 +57,13 @@ class _HistoryTabState extends State<HistoryTab> {
                 child: ListTile(
                   leading: const Icon(Icons.analytics, color: Colors.green, size: 40),
                   title: Text(
-                    loc.translate('statistic'), // 使用多语言翻译
+                    loc.translate('statistic'),
                     style: const TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  subtitle: Text(loc.translate('viewDetailedStatistics')), // 使用多语言翻译
+                  subtitle: Text(loc.translate('viewDetailedStatistics')),
                   trailing: const Icon(Icons.arrow_forward_ios),
                   onTap: () {
                     Navigator.push(
@@ -80,55 +81,192 @@ class _HistoryTabState extends State<HistoryTab> {
   }
 }
 
-// Record Page
-class RecordPage extends StatelessWidget {
+// Record Page (修改为有状态)
+class RecordPage extends StatefulWidget {
   const RecordPage({super.key});
 
   @override
+  State<RecordPage> createState() => _RecordPageState();
+}
+
+class _RecordPageState extends State<RecordPage> {
+  @override
   Widget build(BuildContext context) {
-    // 新增：获取多语言实例
     final loc = AppLocalizations.of(context);
+    final history = Provider.of<HistoryProvider>(context);
+    final grouped = history.groupedByDate;
+
+    // 按日期降序排序
+    final sortedDates = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
 
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.pop(context);
-          },
+          onPressed: () => Navigator.pop(context),
         ),
-        title: Text(loc.translate('record')), // 使用多语言翻译
+        title: Text(loc.translate('record')),
         backgroundColor: const Color(0xFFC168EE),
         foregroundColor: Colors.white,
       ),
-      body: Center(
+      body: sortedDates.isEmpty
+          ? Center(
         child: Text(
-          loc.translate('recordContentWillBeAddedLater'), // 使用多语言翻译
+          loc.translate('noRecords'), // 需添加翻译键
           style: const TextStyle(fontSize: 18, color: Colors.grey),
         ),
+      )
+          : ListView.builder(
+        itemCount: sortedDates.length,
+        itemBuilder: (context, index) {
+          final date = sortedDates[index];
+          final exercises = grouped[date]!;
+          return Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: ListTile(
+              title: Text(
+                _formatDate(date),
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                '${exercises.length} ${loc.translate('exercises')}', // 需添加翻译键
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => WorkoutDetailPage(
+                      date: date,
+                      exercises: exercises,
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }
+
+  String _formatDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
 }
 
-// Statistic Page with List Menu
+// 新增：详细页面显示该日所有运动组
+class WorkoutDetailPage extends StatelessWidget {
+  final DateTime date;
+  final List<ExerciseSet> exercises;
+
+  const WorkoutDetailPage({super.key, required this.date, required this.exercises});
+
+  @override
+  Widget build(BuildContext context) {
+    final loc = AppLocalizations.of(context);
+
+    // 按运动名称分组（内部已合并相同次数的组）
+    Map<String, List<ExerciseSet>> grouped = {};
+    for (var set in exercises) {
+      if (!grouped.containsKey(set.exerciseName)) {
+        grouped[set.exerciseName] = [];
+      }
+      grouped[set.exerciseName]!.add(set);
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(_formatDate(date)),
+        backgroundColor: const Color(0xFFC168EE),
+        foregroundColor: Colors.white,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: grouped.entries.map((entry) {
+          final name = entry.key;
+          final sets = entry.value;
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Image.asset(
+                    _getExerciseImage(name),
+                    width: 60,
+                    height: 60,
+                    fit: BoxFit.contain,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        ...sets.map((set) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '${loc.translate('setsReps')}: ${set.sets}*${set.reps}', // 需添加翻译键
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                        )),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  String _getExerciseImage(String name) {
+    switch (name.toLowerCase()) {
+      case 'bicep curl':
+        return 'assets/images/bicepcurl.png';
+      case 'bench press':
+        return 'assets/images/Bench press.png';
+      case 'running':
+        return 'assets/images/Running.png';
+      case 'sit-up':
+        return 'assets/images/Sit-up.png';
+      case 'squat':
+        return 'assets/images/Squat.png';
+      case 'jump rope':
+        return 'assets/images/Jump rope.png';
+      default:
+        return 'assets/images/Identify.png';
+    }
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+}
+
+// Statistic Page with List Menu (保持不变)
 class StatisticPage extends StatelessWidget {
   const StatisticPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // 新增：获取多语言实例
     final loc = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.pop(context);
-          },
+          onPressed: () => Navigator.pop(context),
         ),
-        title: Text(loc.translate('exerciseStatistics')), // 使用多语言翻译
+        title: Text(loc.translate('exerciseStatistics')),
         backgroundColor: const Color(0xFFC168EE),
         foregroundColor: Colors.white,
       ),
@@ -177,7 +315,7 @@ class StatisticPage extends StatelessWidget {
   }
 }
 
-// Exercise Detail Page with Slidable Bar Chart
+// Exercise Detail Page with Slidable Bar Chart (保持不变)
 class ExerciseDetailPage extends StatefulWidget {
   final String exerciseName;
 
@@ -191,9 +329,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
 
-  // Sample data for demonstration - 3 weeks of data
   final List<List<Map<String, dynamic>>> _weeklyData = [
-    // Week 1
     [
       {'date': '2025-11-01', 'reps': 25},
       {'date': '2025-11-02', 'reps': 30},
@@ -203,7 +339,6 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
       {'date': '2025-11-06', 'reps': 40},
       {'date': '2025-11-07', 'reps': 38},
     ],
-    // Week 2
     [
       {'date': '2025-11-08', 'reps': 42},
       {'date': '2025-11-09', 'reps': 45},
@@ -213,7 +348,6 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
       {'date': '2025-11-13', 'reps': 55},
       {'date': '2025-11-14', 'reps': 52},
     ],
-    // Week 3
     [
       {'date': '2025-11-15', 'reps': 58},
       {'date': '2025-11-16', 'reps': 60},
@@ -227,24 +361,20 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 新增：获取多语言实例
     final loc = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.pop(context);
-          },
+          onPressed: () => Navigator.pop(context),
         ),
-        title: Text('${widget.exerciseName} ${loc.translate('statistics')}'), // 使用多语言翻译
+        title: Text('${widget.exerciseName} ${loc.translate('statistics')}'),
         backgroundColor: const Color(0xFFC168EE),
         foregroundColor: Colors.white,
       ),
       body: Column(
         children: [
-          // Page indicator
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Row(
@@ -262,7 +392,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                       : null,
                 ),
                 Text(
-                  '${loc.translate('week')} ${_currentPage + 1}', // 使用多语言翻译
+                  '${loc.translate('week')} ${_currentPage + 1}',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 IconButton(
@@ -280,7 +410,6 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
             ),
           ),
 
-          // PageView for slidable bar charts
           Expanded(
             child: PageView(
               controller: _pageController,
@@ -300,7 +429,6 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
   }
 
   Widget _buildBarChart(List<Map<String, dynamic>> weekData, BuildContext context) {
-    // 新增：获取多语言实例
     final loc = AppLocalizations.of(context);
 
     return Padding(
@@ -312,7 +440,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
           child: Column(
             children: [
               Text(
-                loc.translate('weeklyRepsProgress'), // 使用多语言翻译
+                loc.translate('weeklyRepsProgress'),
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
@@ -320,7 +448,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                 child: BarChart(
                   BarChartData(
                     alignment: BarChartAlignment.spaceAround,
-                    maxY: _getMaxReps(weekData) * 1.2, // Add some padding at the top
+                    maxY: _getMaxReps(weekData) * 1.2,
                     barTouchData: BarTouchData(
                       enabled: true,
                       touchTooltipData: BarTouchTooltipData(
@@ -331,7 +459,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                             const TextStyle(color: Colors.white),
                             children: [
                               TextSpan(
-                                text: '${rod.toY.toInt()} ${loc.translate('reps')}', // 使用多语言翻译
+                                text: '${rod.toY.toInt()} ${loc.translate('reps')}',
                                 style: const TextStyle(
                                   color: Colors.yellow,
                                   fontWeight: FontWeight.bold,
@@ -350,11 +478,10 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                           getTitlesWidget: (value, meta) {
                             final index = value.toInt();
                             if (index >= 0 && index < weekData.length) {
-                              // Show only day number (e.g., 1, 2, 3...)
                               return Padding(
                                 padding: const EdgeInsets.only(top: 8.0),
                                 child: Text(
-                                  '${loc.translate('day')} ${index + 1}', // 使用多语言翻译
+                                  '${loc.translate('day')} ${index + 1}',
                                   style: const TextStyle(fontSize: 12),
                                 ),
                               );
@@ -408,7 +535,6 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              // Date labels below the chart
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(
@@ -421,7 +547,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                       child: Column(
                         children: [
                           Text(
-                            '${loc.translate('day')} ${index + 1}', // 使用多语言翻译
+                            '${loc.translate('day')} ${index + 1}',
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                           ),
                           Text(
@@ -430,7 +556,7 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
                             textAlign: TextAlign.center,
                           ),
                           Text(
-                            '${data['reps']} ${loc.translate('reps')}', // 使用多语言翻译
+                            '${data['reps']} ${loc.translate('reps')}',
                             style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
                           ),
                         ],

@@ -14,6 +14,10 @@ import '../../utils/bicepcurl_counter.dart' as bc;
 // 导入 TensorFlow Lite 解释器
 import 'package:tflite_flutter/tflite_flutter.dart';
 
+// 导入历史记录提供者
+import 'package:provider/provider.dart';
+import '../../providers/history_provider.dart';
+
 // 连接后UI子状态枚举
 enum ConnectedSubState { waiting, showingExercise, showingSummary }
 
@@ -39,15 +43,10 @@ class _MovingAverageFilter {
 }
 
 class _ButterworthFilter {
-  // 6轴数据，每轴需要独立的滤波器状态
   static const int _numChannels = 6;
-
-  // 4阶 IIR 滤波器的系数 (由 Python scipy.signal.butter 计算得出)
-  // b: 分子系数, a: 分母系数
   final List<double> _b = [4.82434303e-05, 1.92973721e-04, 2.89460582e-04, 1.92973721e-04, 4.82434303e-05];
   final List<double> _a = [1.0, -3.45322477, 4.50413095, -2.62779547, 0.57714418];
 
-  // 状态缓冲区 [通道][阶数]
   late List<List<double>> _x;
   late List<List<double>> _y;
 
@@ -56,22 +55,18 @@ class _ButterworthFilter {
     _y = List.generate(_numChannels, (_) => List.filled(5, 0.0));
   }
 
-  /// 输入原始 [ax, ay, az, gx, gy, gz]，输出滤波后的数据
   List<double> filter(List<double> input) {
     List<double> output = List.filled(_numChannels, 0.0);
 
     for (int c = 0; c < _numChannels; c++) {
-      // 移动输入历史
       for (int i = 4; i > 0; i--) _x[c][i] = _x[c][i - 1];
       _x[c][0] = input[c];
 
-      // 计算差分方程: y[n] = (b[0]*x[n] + b[1]*x[n-1] + ...) - (a[1]*y[n-1] + a[2]*y[n-2] + ...)
       double out = _b[0] * _x[c][0];
       for (int i = 1; i <= 4; i++) {
         out += _b[i] * _x[c][i] - _a[i] * _y[c][i];
       }
 
-      // 移动输出历史
       for (int i = 4; i > 1; i--) _y[c][i] = _y[c][i - 1];
       _y[c][1] = out;
       output[c] = out;
@@ -80,19 +75,22 @@ class _ButterworthFilter {
   }
 }
 
-// ==================== 蹲起计数器（基于阈值6.5） ====================
+// ==================== 蹲起计数器（使用原始Z轴，阈值4.0） ====================
 class _SquatCounter {
   int _count = 0;
   bool _isInSquat = false;
-  final double threshold = 6.5;
+  final double threshold = 5.5; // 可根据实际信号调整
 
   int get count => _count;
 
-  void addSample(double filteredValue) {
-    if (filteredValue < threshold && !_isInSquat) {
+  void addSample(double rawValue) {
+    // 可取消注释以观察原始值
+    // print('原始 Z: $rawValue, 状态: $_isInSquat');
+    if (rawValue < threshold && !_isInSquat) {
       _isInSquat = true;
-    } else if (filteredValue > threshold && _isInSquat) {
+    } else if (rawValue > threshold && _isInSquat) {
       _count++;
+      print('✅ 蹲起计数 +1，当前总数: $_count');
       _isInSquat = false;
     }
   }
@@ -153,7 +151,7 @@ class _HomeTabState extends State<HomeTab> {
   Interpreter? _interpreter;
   List<String> _labels = [];
   List<List<double>> _sensorWindow = [];
-  final int _windowSize = 208;  // 根据模型实际输入调整（1248 / 6 = 208）
+  final int _windowSize = 208;
   final int _inferenceInterval = 10;
   int _sampleCounterForInference = 0;
 
@@ -161,6 +159,10 @@ class _HomeTabState extends State<HomeTab> {
   int _stableCount = 0;
   final int _stableThreshold = 5;
   final double _confidenceThreshold = 0.7;
+
+  // ==================== 历史记录相关 ====================
+  List<ExerciseSet> _sessionExercises = [];
+  String? _currentExerciseName;
 
   // ==================== 初始化与销毁 ====================
   @override
@@ -208,6 +210,16 @@ class _HomeTabState extends State<HomeTab> {
     _activeCounter?.reset();
   }
 
+  int _getCurrentCount() {
+    if (_activeCounter == null) return 0;
+    if (_activeCounter is _SquatCounter) {
+      return (_activeCounter as _SquatCounter).count;
+    } else if (_activeCounter is bc.ExerciseCounter) {
+      return (_activeCounter as bc.ExerciseCounter).count;
+    }
+    return 0;
+  }
+
   void _resetAllState() {
     _filter = null;
     _squatCounter = null;
@@ -230,6 +242,9 @@ class _HomeTabState extends State<HomeTab> {
     _sampleCounterForInference = 0;
     _currentInferredExercise = null;
     _stableCount = 0;
+
+    _sessionExercises.clear();
+    _currentExerciseName = null;
   }
 
   // ==================== 模型加载 ====================
@@ -237,19 +252,18 @@ class _HomeTabState extends State<HomeTab> {
     try {
       _interpreter = await Interpreter.fromAsset('assets/models/miniresnet_model.tflite');
       print('✅ 模型加载成功');
-      // 打印输入张量信息
       var inputTensors = _interpreter!.getInputTensors();
       print('模型输入张量: $inputTensors');
-      _labels = ['rest', 'squat'];
+      _labels = ['rest', 'squat', 'bicep'];
     } catch (e) {
       print('❌ 模型加载失败: $e');
     }
   }
+
   static const List<double> _bCoeffs = [4.82434303e-05, 1.92973721e-04, 2.89460582e-04, 1.92973721e-04, 4.82434303e-05];
   static const List<double> _aCoeffs = [1.0, -3.45322477, 4.50413095, -2.62779547, 0.57714418];
   List<double>? _cachedZi;
 
-  /// Direct Form II Transposed，支持初始条件
   List<double> _lfilterDF2T(List<double> x, [List<double>? zi]) {
     int n = x.length;
     List<double> y = List.filled(n, 0.0);
@@ -265,7 +279,6 @@ class _HomeTabState extends State<HomeTab> {
     return y;
   }
 
-  /// 计算滤波器初始条件（等效 scipy lfilter_zi）
   List<double> _computeZi() {
     if (_cachedZi != null) return _cachedZi!;
     List<double> z = List.filled(4, 0.0);
@@ -280,7 +293,6 @@ class _HomeTabState extends State<HomeTab> {
     return z;
   }
 
-  /// 等效 scipy.signal.filtfilt（含镜像填充 + 初始条件）
   List<List<double>> _filtfilt(List<List<double>> window) {
     int len = window.length;
     int padLen = 14;
@@ -290,7 +302,6 @@ class _HomeTabState extends State<HomeTab> {
     for (int c = 0; c < 6; c++) {
       List<double> col = List.generate(len, (i) => window[i][c]);
 
-      // 镜像填充
       List<double> padded = List.filled(padLen + len + padLen, 0.0);
       for (int i = 0; i < padLen; i++) {
         padded[padLen - 1 - i] = 2 * col[0] - col[i + 1];
@@ -302,16 +313,13 @@ class _HomeTabState extends State<HomeTab> {
         padded[padLen + len + i] = 2 * col[len - 1] - col[len - 2 - i];
       }
 
-      // 前向滤波，初始条件 = zi * 第一个样本值
       List<double> ziF = zi.map((z) => z * padded[0]).toList();
       List<double> forward = _lfilterDF2T(padded, ziF);
 
-      // 反转 + 反向滤波，初始条件 = zi * 反转后第一个样本值
       List<double> rev = forward.reversed.toList();
       List<double> ziB = zi.map((z) => z * rev[0]).toList();
       List<double> backward = _lfilterDF2T(rev, ziB);
 
-      // 再反转，取中间部分
       List<double> final_ = backward.reversed.toList();
       for (int i = 0; i < len; i++) {
         result[i][c] = final_[padLen + i];
@@ -326,7 +334,6 @@ class _HomeTabState extends State<HomeTab> {
     if (_sensorWindow.length < _windowSize) return;
 
     try {
-      // 对窗口做 filtfilt（前向+反向 IIR 滤波）
       List<List<double>> filtered = _filtfilt(_sensorWindow);
 
       List<double> flatten = [];
@@ -355,33 +362,26 @@ class _HomeTabState extends State<HomeTab> {
       if (maxProb > _confidenceThreshold) {
         if (_currentInferredExercise == detectedExercise) {
           _stableCount++;
-          // print('📈 连续相同运动次数: $_stableCount');
         } else {
           _currentInferredExercise = detectedExercise;
           _stableCount = 1;
-          // print('🔄 运动变化为新运动: $detectedExercise');
         }
 
         if (_stableCount >= _stableThreshold && _connectedSubState == ConnectedSubState.waiting && detectedExercise != 'rest') {
-          print('🎯 动作转换: waiting → $detectedExercise (连续${_stableCount}次, 置信度${maxProb.toStringAsFixed(3)})');
+          print('🎯 动作转换: waiting → $detectedExercise');
           _onExerciseDetected(detectedExercise);
         }
 
-        // ✅ 新增：高置信度rest也能触发结束
         if (_stableCount >= _stableThreshold &&
             _connectedSubState == ConnectedSubState.showingExercise &&
             detectedExercise == 'rest') {
-          print('🏁 动作转换: $_currentExercise → rest (连续${_stableCount}次, 置信度${maxProb.toStringAsFixed(3)})');
+          print('🏁 动作转换: $_currentExercise → rest');
           _onExerciseStopped();
         }
       } else {
-
-          // 低置信度时只重置计数，不立即结束运动
-          _stableCount = 0;
-          _currentInferredExercise = null;
-        }
-
-
+        _stableCount = 0;
+        _currentInferredExercise = null;
+      }
     } catch (e) {
       print('推理内部错误: $e');
     }
@@ -541,11 +541,33 @@ class _HomeTabState extends State<HomeTab> {
 
     _disconnectTimer?.cancel();
     _disconnectTimer = Timer(const Duration(seconds: 3), () {
-      _performDisconnect();
+      _performDisconnect(context);
     });
   }
 
-  Future<void> _performDisconnect() async {
+  Future<void> _performDisconnect(BuildContext context) async {
+    if (_currentExerciseName != null && _activeCounter != null) {
+      int count = _getCurrentCount();
+      if (count > 0) {
+        _sessionExercises.add(ExerciseSet(
+          exerciseName: _currentExerciseName!,
+          reps: count,
+          sets: 1,
+        ));
+      }
+      _currentExerciseName = null;
+      _activeCounter?.reset();
+    }
+
+    if (_sessionExercises.isNotEmpty) {
+      final history = Provider.of<HistoryProvider>(context, listen: false);
+      history.addSession(WorkoutSession(
+        date: DateTime.now(),
+        exercises: List.from(_sessionExercises),
+      ));
+      _sessionExercises.clear();
+    }
+
     try {
       await FlutterBluePlus.stopScan();
       _stopRecording();
@@ -590,18 +612,12 @@ class _HomeTabState extends State<HomeTab> {
         }
       }
       print("未找到目标服务或特征值");
-      for (BluetoothService service in services) {
-        print("服务 UUID: ${service.uuid}");
-        for (BluetoothCharacteristic char in service.characteristics) {
-          print("  - 特征 UUID: ${char.uuid}, 属性: ${char.properties}");
-        }
-      }
     } catch (e) {
       print("启动数据服务错误: $e");
     }
   }
 
-  // ==================== 数据处理（修改：隔离推理异常，避免乱码） ====================
+  // ==================== 数据处理（关键修改：计数器使用原始 Z 轴） ====================
   void _handleSensorData(List<int> data) {
     if (data.isEmpty) return;
 
@@ -618,7 +634,6 @@ class _HomeTabState extends State<HomeTab> {
         return;
       }
 
-      // 初始化巴特沃斯滤波器
       _imuFilter ??= _ButterworthFilter();
 
       for (int i = 0; i < sampleCount; i++) {
@@ -639,34 +654,25 @@ class _HomeTabState extends State<HomeTab> {
         double gyroZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // --- 核心改动：执行滤波 ---
+        // 滤波（用于显示或后续处理）
         List<double> rawSample = [accelX, accelY, accelZ, gyroX, gyroY, gyroZ];
         List<double> filteredSample = _imuFilter!.filter(rawSample);
 
-        // 分解滤波后的数据以便后续使用
-        double fAx = filteredSample[0];
-        double fAy = filteredSample[1];
-        double fAz = filteredSample[2];
-        double fGx = filteredSample[3];
-        double fGy = filteredSample[4];
-        double fGz = filteredSample[5];
-
-        // 计数逻辑：使用滤波后的 Z 轴，更稳定
+        // 计数逻辑：使用原始 Z 轴 (accelZ)，不经过滤波，阈值已在 _SquatCounter 内部处理
         if (_activeCounter != null) {
           if (_activeCounter is _SquatCounter) {
-            (_activeCounter as _SquatCounter).addSample(fAz);
+            (_activeCounter as _SquatCounter).addSample(accelZ); // 使用原始值
           } else if (_activeCounter is bc.ExerciseCounter) {
-            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(fAz);
+            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(accelZ); // 假设也使用原始值
           }
         }
 
-        // 滑动窗口存原始数据，推理时再做 filtfilt
+        // 滑动窗口存原始数据，用于推理
         _sensorWindow.add([accelX, accelY, accelZ, gyroX, gyroY, gyroZ]);
         if (_sensorWindow.length > _windowSize) {
           _sensorWindow.removeAt(0);
         }
 
-        // 推理逻辑保持不变，但现在输入的是干净的信号
         _sampleCounterForInference++;
         if (_sampleCounterForInference >= _inferenceInterval && _sensorWindow.length == _windowSize) {
           _sampleCounterForInference = 0;
@@ -677,7 +683,7 @@ class _HomeTabState extends State<HomeTab> {
           }
         }
 
-        // 保存原始数据到 CSV (建议存原始数据，方便出问题后回溯分析)
+        // 保存原始数据到 CSV
         _sensorData.add([
           sampleTime.toIso8601String(),
           accelX.toStringAsFixed(6),
@@ -791,6 +797,21 @@ class _HomeTabState extends State<HomeTab> {
 
   // ==================== 运动检测接口 ====================
   void _onExerciseDetected(String exerciseName) {
+    if (_currentExerciseName != null && _activeCounter != null) {
+      int count = _getCurrentCount();
+      if (count > 0) {
+        _sessionExercises.add(ExerciseSet(
+          exerciseName: _currentExerciseName!,
+          reps: count,
+          sets: 1,
+        ));
+      }
+    }
+
+    _setActiveCounter(exerciseName);
+    _activeCounter?.reset();
+    _currentExerciseName = exerciseName;
+
     String imagePath;
     switch (exerciseName.toLowerCase()) {
       case 'bicep curl':
@@ -812,8 +833,6 @@ class _HomeTabState extends State<HomeTab> {
         imagePath = 'assets/images/Identify.png';
     }
 
-    _setActiveCounter(exerciseName);
-
     setState(() {
       _currentExercise = exerciseName;
       _currentExerciseImage = imagePath;
@@ -826,17 +845,23 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   void _onExerciseStopped() {
-    int count = 0;
-    if (_activeCounter != null) {
-      if (_activeCounter is _SquatCounter) {
-        count = (_activeCounter as _SquatCounter).count;
-      } else if (_activeCounter is bc.ExerciseCounter) {
-        count = (_activeCounter as bc.ExerciseCounter).count;
+    int lastCount = 0;
+    if (_currentExerciseName != null && _activeCounter != null) {
+      lastCount = _getCurrentCount();
+      if (lastCount > 0) {
+        _sessionExercises.add(ExerciseSet(
+          exerciseName: _currentExerciseName!,
+          reps: lastCount,
+          sets: 1,
+        ));
       }
     }
 
+    _currentExerciseName = null;
+    _activeCounter?.reset();
+
     setState(() {
-      _exerciseCount = count;
+      _exerciseCount = lastCount;
       _connectedSubState = ConnectedSubState.showingSummary;
     });
 
