@@ -558,7 +558,7 @@ class _HomeTabState extends State<HomeTab> {
     });
 
     _disconnectTimer?.cancel();
-    _disconnectTimer = Timer(const Duration(seconds: 3), () {
+    _disconnectTimer = Timer(const Duration(seconds: 2), () {
       _performDisconnect(context);
     });
   }
@@ -789,7 +789,7 @@ class _HomeTabState extends State<HomeTab> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('数据已保存到: $_csvFilePath'),
-        duration: const Duration(seconds: 3),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -884,7 +884,7 @@ class _HomeTabState extends State<HomeTab> {
     });
 
     _summaryTimer?.cancel();
-    _summaryTimer = Timer(const Duration(seconds: 3), () {
+    _summaryTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
           _connectedSubState = ConnectedSubState.waiting;
