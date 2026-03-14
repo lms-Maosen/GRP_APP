@@ -14,7 +14,6 @@ class HistoryTab extends StatefulWidget {
 class _HistoryTabState extends State<HistoryTab> {
   @override
   Widget build(BuildContext context) {
-    // 获取多语言实例
     final loc = AppLocalizations.of(context);
 
     return Scaffold(
@@ -23,7 +22,6 @@ class _HistoryTabState extends State<HistoryTab> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Record Card
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Card(
@@ -48,8 +46,6 @@ class _HistoryTabState extends State<HistoryTab> {
                 ),
               ),
             ),
-
-            // Statistic Card
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: Card(
@@ -81,7 +77,7 @@ class _HistoryTabState extends State<HistoryTab> {
   }
 }
 
-// Record Page (修改为有状态)
+// ==================== Record Page ====================
 class RecordPage extends StatefulWidget {
   const RecordPage({super.key});
 
@@ -96,7 +92,6 @@ class _RecordPageState extends State<RecordPage> {
     final history = Provider.of<HistoryProvider>(context);
     final grouped = history.groupedByDate;
 
-    // 按日期降序排序
     final sortedDates = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
 
     return Scaffold(
@@ -112,7 +107,7 @@ class _RecordPageState extends State<RecordPage> {
       body: sortedDates.isEmpty
           ? Center(
         child: Text(
-          loc.translate('noRecords'), // 需添加翻译键
+          loc.translate('noRecords'),
           style: const TextStyle(fontSize: 18, color: Colors.grey),
         ),
       )
@@ -129,7 +124,7 @@ class _RecordPageState extends State<RecordPage> {
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               subtitle: Text(
-                '${exercises.length} ${loc.translate('exercises')}', // 需添加翻译键
+                '${exercises.length} ${loc.translate('exercises')}',
               ),
               trailing: const Icon(Icons.arrow_forward_ios),
               onTap: () {
@@ -155,7 +150,6 @@ class _RecordPageState extends State<RecordPage> {
   }
 }
 
-// 新增：详细页面显示该日所有运动组
 class WorkoutDetailPage extends StatelessWidget {
   final DateTime date;
   final List<ExerciseSet> exercises;
@@ -166,7 +160,6 @@ class WorkoutDetailPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final loc = AppLocalizations.of(context);
 
-    // 按运动名称分组（内部已合并相同次数的组）
     Map<String, List<ExerciseSet>> grouped = {};
     for (var set in exercises) {
       if (!grouped.containsKey(set.exerciseName)) {
@@ -212,7 +205,7 @@ class WorkoutDetailPage extends StatelessWidget {
                         ...sets.map((set) => Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Text(
-                            '${loc.translate('setsReps')}: ${set.sets}*${set.reps}', // 需添加翻译键
+                            '${loc.translate('setsReps')}: ${set.sets}*${set.reps}',
                             style: const TextStyle(fontSize: 16),
                           ),
                         )),
@@ -252,9 +245,18 @@ class WorkoutDetailPage extends StatelessWidget {
   }
 }
 
-// Statistic Page with List Menu (保持不变)
+// ==================== Statistic Page (真实数据版) ====================
 class StatisticPage extends StatelessWidget {
   const StatisticPage({super.key});
+
+  final List<Map<String, String>> _exercises = const [
+    {'key': 'squat', 'image': 'assets/images/Squat.png', 'nameKey': 'squat'},
+    {'key': 'bench press', 'image': 'assets/images/Bench press.png', 'nameKey': 'benchPress'},
+    {'key': 'running', 'image': 'assets/images/Running.png', 'nameKey': 'running'},
+    {'key': 'sit-up', 'image': 'assets/images/Sit-up.png', 'nameKey': 'sitUp'},
+    {'key': 'jump rope', 'image': 'assets/images/Jump rope.png', 'nameKey': 'jumpRope'},
+    {'key': 'bicep', 'image': 'assets/images/bicepcurl.png', 'nameKey': 'bicepCurl'},
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -271,19 +273,25 @@ class StatisticPage extends StatelessWidget {
         foregroundColor: Colors.white,
       ),
       body: ListView(
-        children: [
-          _buildExerciseListItem(loc.translate('chinUp'), 'assets/images/Chin-up.png', context),
-          _buildExerciseListItem(loc.translate('benchPress'), 'assets/images/Bench press.png', context),
-          _buildExerciseListItem(loc.translate('running'), 'assets/images/Running.png', context),
-          _buildExerciseListItem(loc.translate('sitUp'), 'assets/images/Sit-up.png', context),
-          _buildExerciseListItem(loc.translate('squat'), 'assets/images/Squat.png', context),
-          _buildExerciseListItem(loc.translate('jumpRope'), 'assets/images/Jump rope.png', context),
-        ],
+        children: _exercises.map((item) {
+          return _buildExerciseListItem(
+            context: context,
+            exerciseKey: item['key']!,
+            nameKey: item['nameKey']!,
+            imagePath: item['image']!,
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildExerciseListItem(String exerciseName, String imagePath, BuildContext context) {
+  Widget _buildExerciseListItem({
+    required BuildContext context,
+    required String exerciseKey,
+    required String nameKey,
+    required String imagePath,
+  }) {
+    final loc = AppLocalizations.of(context);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       elevation: 2,
@@ -295,7 +303,7 @@ class StatisticPage extends StatelessWidget {
           fit: BoxFit.contain,
         ),
         title: Text(
-          exerciseName,
+          loc.translate(nameKey),
           style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -306,7 +314,7 @@ class StatisticPage extends StatelessWidget {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ExerciseDetailPage(exerciseName: exerciseName),
+              builder: (context) => ExerciseDetailPage(exerciseKey: exerciseKey),
             ),
           );
         },
@@ -315,53 +323,36 @@ class StatisticPage extends StatelessWidget {
   }
 }
 
-// Exercise Detail Page with Slidable Bar Chart (保持不变)
+// ==================== Exercise Detail Page (真实数据版) ====================
 class ExerciseDetailPage extends StatefulWidget {
-  final String exerciseName;
+  final String exerciseKey;
 
-  const ExerciseDetailPage({super.key, required this.exerciseName});
+  const ExerciseDetailPage({super.key, required this.exerciseKey});
 
   @override
   State<ExerciseDetailPage> createState() => _ExerciseDetailPageState();
 }
 
 class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
-  final PageController _pageController = PageController();
-  int _currentPage = 0;
-
-  final List<List<Map<String, dynamic>>> _weeklyData = [
-    [
-      {'date': '2025-11-01', 'reps': 25},
-      {'date': '2025-11-02', 'reps': 30},
-      {'date': '2025-11-03', 'reps': 28},
-      {'date': '2025-11-04', 'reps': 35},
-      {'date': '2025-11-05', 'reps': 32},
-      {'date': '2025-11-06', 'reps': 40},
-      {'date': '2025-11-07', 'reps': 38},
-    ],
-    [
-      {'date': '2025-11-08', 'reps': 42},
-      {'date': '2025-11-09', 'reps': 45},
-      {'date': '2025-11-10', 'reps': 38},
-      {'date': '2025-11-11', 'reps': 50},
-      {'date': '2025-11-12', 'reps': 48},
-      {'date': '2025-11-13', 'reps': 55},
-      {'date': '2025-11-14', 'reps': 52},
-    ],
-    [
-      {'date': '2025-11-15', 'reps': 58},
-      {'date': '2025-11-16', 'reps': 60},
-      {'date': '2025-11-17', 'reps': 55},
-      {'date': '2025-11-18', 'reps': 65},
-      {'date': '2025-11-19', 'reps': 62},
-      {'date': '2025-11-20', 'reps': 70},
-      {'date': '2025-11-21', 'reps': 68},
-    ],
-  ];
+  Map<DateTime, int> _getAggregatedData(HistoryProvider history) {
+    final Map<DateTime, int> data = {};
+    for (var session in history.sessions) {
+      for (var set in session.exercises) {
+        if (set.exerciseName.toLowerCase() == widget.exerciseKey.toLowerCase()) {
+          final date = DateTime(session.date.year, session.date.month, session.date.day);
+          data[date] = (data[date] ?? 0) + (set.reps * set.sets);
+        }
+      }
+    }
+    return data;
+  }
 
   @override
   Widget build(BuildContext context) {
     final loc = AppLocalizations.of(context);
+    final history = Provider.of<HistoryProvider>(context);
+    final aggregated = _getAggregatedData(history);
+    final sortedEntries = aggregated.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
 
     return Scaffold(
       appBar: AppBar(
@@ -369,237 +360,149 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('${widget.exerciseName} ${loc.translate('statistics')}'),
+        title: Text('${loc.translate(widget.exerciseKey)} ${loc.translate('statistics')}'),
         backgroundColor: const Color(0xFFC168EE),
         foregroundColor: Colors.white,
       ),
-      body: Column(
-        children: [
-          Padding(
+      body: sortedEntries.isEmpty
+          ? Center(
+        child: Text(
+          loc.translate('noData'),
+          style: const TextStyle(fontSize: 18, color: Colors.grey),
+        ),
+      )
+          : Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Card(
+          elevation: 4,
+          child: Padding(
             padding: const EdgeInsets.all(16.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Column(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back_ios),
-                  onPressed: _currentPage > 0
-                      ? () {
-                    _pageController.previousPage(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  }
-                      : null,
-                ),
                 Text(
-                  '${loc.translate('week')} ${_currentPage + 1}',
+                  loc.translate('exerciseHistory'),
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_forward_ios),
-                  onPressed: _currentPage < _weeklyData.length - 1
-                      ? () {
-                    _pageController.nextPage(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                    );
-                  }
-                      : null,
+                const SizedBox(height: 16),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SizedBox(
+                      width: (sortedEntries.length * 60.0).clamp(200.0, double.infinity),
+                      child: BarChart(
+                        BarChartData(
+                          alignment: BarChartAlignment.spaceAround,
+                          maxY: _getMaxY(sortedEntries) * 1.2,
+                          barTouchData: BarTouchData(
+                            enabled: true,
+                            touchTooltipData: BarTouchTooltipData(
+                              tooltipBgColor: Colors.grey[800],
+                              getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                                final entry = sortedEntries[group.x];
+                                return BarTooltipItem(
+                                  '${_formatDate(entry.key)}\n',
+                                  const TextStyle(color: Colors.white),
+                                  children: [
+                                    TextSpan(
+                                      text: '${rod.toY.toInt()} ${loc.translate('reps')}',
+                                      style: const TextStyle(
+                                        color: Colors.yellow,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                          titlesData: FlTitlesData(
+                            show: true,
+                            bottomTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                getTitlesWidget: (value, meta) {
+                                  final index = value.toInt();
+                                  if (index >= 0 && index < sortedEntries.length) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(top: 8.0),
+                                      child: Text(
+                                        _formatDateShort(sortedEntries[index].key),
+                                        style: const TextStyle(fontSize: 10),
+                                      ),
+                                    );
+                                  }
+                                  return const Text('');
+                                },
+                                reservedSize: 40,
+                              ),
+                            ),
+                            leftTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                getTitlesWidget: (value, meta) {
+                                  return Text(
+                                    value.toInt().toString(),
+                                    style: const TextStyle(fontSize: 10),
+                                  );
+                                },
+                                reservedSize: 30,
+                              ),
+                            ),
+                            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          ),
+                          borderData: FlBorderData(
+                            show: true,
+                            border: Border.all(color: const Color(0xff37434d), width: 1),
+                          ),
+                          barGroups: List.generate(sortedEntries.length, (index) {
+                            final entry = sortedEntries[index];
+                            return BarChartGroupData(
+                              x: index,
+                              barRods: [
+                                BarChartRodData(
+                                  toY: entry.value.toDouble(),
+                                  gradient: _getBarGradient(entry.value),
+                                  width: 20,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ],
+                              showingTooltipIndicators: [0],
+                            );
+                          }),
+                          gridData: const FlGridData(show: true),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
-          ),
-
-          Expanded(
-            child: PageView(
-              controller: _pageController,
-              onPageChanged: (int page) {
-                setState(() {
-                  _currentPage = page;
-                });
-              },
-              children: _weeklyData.map((weekData) {
-                return _buildBarChart(weekData, context);
-              }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBarChart(List<Map<String, dynamic>> weekData, BuildContext context) {
-    final loc = AppLocalizations.of(context);
-
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Card(
-        elevation: 4,
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              Text(
-                loc.translate('weeklyRepsProgress'),
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: BarChart(
-                  BarChartData(
-                    alignment: BarChartAlignment.spaceAround,
-                    maxY: _getMaxReps(weekData) * 1.2,
-                    barTouchData: BarTouchData(
-                      enabled: true,
-                      touchTooltipData: BarTouchTooltipData(
-                        tooltipBgColor: Colors.grey[800],
-                        getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                          return BarTooltipItem(
-                            '${weekData[groupIndex]['date']}\n',
-                            const TextStyle(color: Colors.white),
-                            children: [
-                              TextSpan(
-                                text: '${rod.toY.toInt()} ${loc.translate('reps')}',
-                                style: const TextStyle(
-                                  color: Colors.yellow,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                    titlesData: FlTitlesData(
-                      show: true,
-                      bottomTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                          showTitles: true,
-                          getTitlesWidget: (value, meta) {
-                            final index = value.toInt();
-                            if (index >= 0 && index < weekData.length) {
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 8.0),
-                                child: Text(
-                                  '${loc.translate('day')} ${index + 1}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                              );
-                            }
-                            return const Text('');
-                          },
-                          reservedSize: 40,
-                        ),
-                      ),
-                      leftTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                          showTitles: true,
-                          getTitlesWidget: (value, meta) {
-                            return Text(
-                              value.toInt().toString(),
-                              style: const TextStyle(fontSize: 12),
-                            );
-                          },
-                          reservedSize: 40,
-                        ),
-                      ),
-                      topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                      rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                    ),
-                    borderData: FlBorderData(
-                      show: true,
-                      border: Border.all(color: const Color(0xff37434d), width: 1),
-                    ),
-                    barGroups: weekData.asMap().entries.map((entry) {
-                      final index = entry.key;
-                      final data = entry.value;
-                      return BarChartGroupData(
-                        x: index,
-                        barRods: [
-                          BarChartRodData(
-                            toY: data['reps'].toDouble(),
-                            gradient: _getBarGradient(data['reps']),
-                            width: 20,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                        ],
-                        showingTooltipIndicators: [0],
-                      );
-                    }).toList(),
-                    gridData: const FlGridData(show: true),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: weekData.asMap().entries.map((entry) {
-                    final index = entry.key;
-                    final data = entry.value;
-                    return Container(
-                      width: 80,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Column(
-                        children: [
-                          Text(
-                            '${loc.translate('day')} ${index + 1}',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                          ),
-                          Text(
-                            _formatDate(data['date']),
-                            style: const TextStyle(fontSize: 10, color: Colors.grey),
-                            textAlign: TextAlign.center,
-                          ),
-                          Text(
-                            '${data['reps']} ${loc.translate('reps')}',
-                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ],
           ),
         ),
       ),
     );
   }
 
-  double _getMaxReps(List<Map<String, dynamic>> data) {
-    return data.map((item) => item['reps'].toDouble()).reduce((a, b) => a > b ? a : b);
+  double _getMaxY(List<MapEntry<DateTime, int>> entries) {
+    return entries.map((e) => e.value.toDouble()).fold(0, (a, b) => a > b ? a : b);
   }
 
   LinearGradient _getBarGradient(int reps) {
     if (reps >= 60) {
-      return LinearGradient(
-        colors: [Colors.green[300]!, Colors.green[700]!],
-      );
+      return LinearGradient(colors: [Colors.green[300]!, Colors.green[700]!]);
     } else if (reps >= 40) {
-      return LinearGradient(
-        colors: [Colors.blue[300]!, Colors.blue[700]!],
-      );
+      return LinearGradient(colors: [Colors.blue[300]!, Colors.blue[700]!]);
     } else {
-      return LinearGradient(
-        colors: [Colors.orange[300]!, Colors.orange[700]!],
-      );
+      return LinearGradient(colors: [Colors.orange[300]!, Colors.orange[700]!]);
     }
   }
 
-  String _formatDate(String dateString) {
-    final date = DateTime.parse(dateString);
-    return '${date.month}/${date.day}';
+  String _formatDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
 
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
+  String _formatDateShort(DateTime date) {
+    return '${date.month}/${date.day}';
   }
 }

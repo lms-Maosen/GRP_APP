@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'home_tab.dart';
 import 'history_tab.dart';
 import 'settings_tab.dart';
-// 新增：导入多语言工具类
 import '../../i18n/app_localizations.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -16,49 +15,50 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  bool _bottomNavEnabled = true; // 新增：控制底部导航栏是否可用
 
   final List<Widget> _tabs = [
-    const HomeTab(),
+    HomeTab(), // 注意：不再使用 const，因为需要传入回调
     const HistoryTab(),
     const SettingsTab(),
   ];
 
   @override
   Widget build(BuildContext context) {
-    // 新增：获取多语言实例
     final loc = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Center(
-            child: Container(
-                child: const Text('Welcome')
-            )
-        ),
+        title: const Center(child: Text('Welcome')),
         backgroundColor: const Color(0xFFC168EE),
         foregroundColor: const Color(0xFFC168EE),
       ),
       body: _tabs[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        onTap: (index) {
+        // 关键修改：根据 _bottomNavEnabled 决定是否响应点击
+        onTap: _bottomNavEnabled
+            ? (index) {
           setState(() {
             _currentIndex = index;
           });
-        },
-        // 关键修改：移除 const，替换 label 为多语言翻译
+        }
+            : null, // 禁用时 onTap 为 null，则无法点击
+        // 动态设置颜色以反映禁用状态
+        selectedItemColor: _bottomNavEnabled ? null : Colors.grey,
+        unselectedItemColor: _bottomNavEnabled ? null : Colors.grey,
         items: [
           BottomNavigationBarItem(
             icon: const Icon(Icons.home),
-            label: loc.translate('home'), // 替换固定英文为翻译
+            label: loc.translate('home'),
           ),
           BottomNavigationBarItem(
             icon: const Icon(Icons.history),
-            label: loc.translate('history'), // 替换固定英文为翻译
+            label: loc.translate('history'),
           ),
           BottomNavigationBarItem(
             icon: const Icon(Icons.settings),
-            label: loc.translate('settings'), // 替换固定英文为翻译
+            label: loc.translate('settings'),
           ),
         ],
       ),

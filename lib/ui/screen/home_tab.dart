@@ -8,17 +8,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:csv/csv.dart';
 import '../../i18n/app_localizations.dart';
 import 'dart:math' as math;
-// 导入二头弯举计数器（仍保留）
 import '../../utils/bicepcurl_counter.dart' as bc;
-
-// 导入 TensorFlow Lite 解释器
 import 'package:tflite_flutter/tflite_flutter.dart';
-
-// 导入历史记录提供者
 import 'package:provider/provider.dart';
 import '../../providers/history_provider.dart';
 
-// 连接后UI子状态枚举
 enum ConnectedSubState { waiting, showingExercise, showingSummary }
 
 // ==================== 移动平均滤波器（三点平均） ====================
@@ -79,13 +73,11 @@ class _ButterworthFilter {
 class _SquatCounter {
   int _count = 0;
   bool _isInSquat = false;
-  final double threshold = 6.5; // 可根据实际信号调整
+  final double threshold = 6.5;
 
   int get count => _count;
 
   void addSample(double rawValue) {
-    // 可取消注释以观察原始值
-    // print('原始 Z: $rawValue, 状态: $_isInSquat');
     if (rawValue < threshold && !_isInSquat) {
       _isInSquat = true;
     } else if (rawValue > threshold && _isInSquat) {
@@ -102,7 +94,9 @@ class _SquatCounter {
 }
 
 class HomeTab extends StatefulWidget {
-  const HomeTab({super.key});
+  final ValueChanged<bool>? onConnectionStateChanged; // 新增回调
+
+  const HomeTab({super.key, this.onConnectionStateChanged});
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -145,7 +139,7 @@ class _HomeTabState extends State<HomeTab> {
   _MovingAverageFilter? _filter;
   _SquatCounter? _squatCounter;
   bc.ExerciseCounter? _bicepCurlCounter;
-  dynamic _activeCounter; // 当前激活的计数器
+  dynamic _activeCounter;
 
   // ==================== TFLite 模型相关 ====================
   Interpreter? _interpreter;
@@ -171,6 +165,7 @@ class _HomeTabState extends State<HomeTab> {
     _setupBluetoothListeners();
     _checkCurrentConnections();
     _requestPermissions();
+    _updateParentConnectionState(); // 初始化时通知父级
   }
 
   @override
@@ -188,6 +183,12 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   // ==================== 辅助方法 ====================
+  void _updateParentConnectionState() {
+    // 连接中或正在显示断开消息时禁用底部栏
+    bool enabled = !(_isConnected || _showDisconnectMessage);
+    widget.onConnectionStateChanged?.call(enabled);
+  }
+
   void _resetFiltersAndCounters() {
     _filter = _MovingAverageFilter();
     _squatCounter = _SquatCounter();
@@ -384,11 +385,10 @@ class _HomeTabState extends State<HomeTab> {
             detectedExercise != 'rest' &&
             detectedExercise != _currentExercise) {
           print('🔄 动作直接切换: $_currentExercise → $detectedExercise');
-          _onExerciseStopped();       // 先结算当前运动
-          _onExerciseDetected(detectedExercise);  // 再开始新运动
+          _onExerciseStopped();
+          _onExerciseDetected(detectedExercise);
         }
 
-// summary 期间检测到新运动，立即切换
         if (_stableCount >= _stableThreshold &&
             _connectedSubState == ConnectedSubState.showingSummary &&
             detectedExercise != 'rest') {
@@ -423,6 +423,7 @@ class _HomeTabState extends State<HomeTab> {
           _isConnected = true;
           _connectedDevice = connectedDevices.first;
         });
+        _updateParentConnectionState();
         _resetFiltersAndCounters();
         _startDataServices();
         _loadModel();
@@ -451,6 +452,7 @@ class _HomeTabState extends State<HomeTab> {
           _connectedDevice = null;
           _stopRecording();
         });
+        _updateParentConnectionState();
         _resetAllState();
       }
     });
@@ -503,6 +505,7 @@ class _HomeTabState extends State<HomeTab> {
           _isConnected = true;
           _connectedDevice = device;
         });
+        _updateParentConnectionState();
       }
 
       _setupConnectionStateListener(device);
@@ -520,6 +523,7 @@ class _HomeTabState extends State<HomeTab> {
           _isConnected = false;
           _connectedDevice = null;
         });
+        _updateParentConnectionState();
       }
     } finally {
       if (mounted) setState(() => _isConnecting = false);
@@ -536,6 +540,7 @@ class _HomeTabState extends State<HomeTab> {
             _isConnected = false;
             _connectedDevice = null;
           });
+          _updateParentConnectionState();
         }
         _stopRecording();
         _dataSubscription?.cancel();
@@ -556,6 +561,7 @@ class _HomeTabState extends State<HomeTab> {
           ? 'Exercises have been recorded'
           : 'No exercise detected';
     });
+    _updateParentConnectionState();
 
     _disconnectTimer?.cancel();
     _disconnectTimer = Timer(const Duration(seconds: 2), () {
@@ -602,6 +608,7 @@ class _HomeTabState extends State<HomeTab> {
           _devices.clear();
           _resetAllState();
         });
+        _updateParentConnectionState();
       }
       _disconnectTimer = null;
     }
@@ -635,7 +642,6 @@ class _HomeTabState extends State<HomeTab> {
     }
   }
 
-  // ==================== 数据处理（关键修改：计数器使用原始 Z 轴） ====================
   void _handleSensorData(List<int> data) {
     if (data.isEmpty) return;
 
@@ -676,16 +682,15 @@ class _HomeTabState extends State<HomeTab> {
         List<double> rawSample = [accelX, accelY, accelZ, gyroX, gyroY, gyroZ];
         List<double> filteredSample = _imuFilter!.filter(rawSample);
 
-        // 计数逻辑：使用原始 Z 轴 (accelZ)，不经过滤波，阈值已在 _SquatCounter 内部处理
+        // 计数逻辑：使用原始 Z 轴
         if (_activeCounter != null) {
           if (_activeCounter is _SquatCounter) {
-            (_activeCounter as _SquatCounter).addSample(accelZ); // 使用原始值
+            (_activeCounter as _SquatCounter).addSample(accelZ);
           } else if (_activeCounter is bc.ExerciseCounter) {
-            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(accelZ); // 假设也使用原始值
+            (_activeCounter as bc.ExerciseCounter).countBySingleAxis(accelZ);
           }
         }
 
-        // 滑动窗口存原始数据，用于推理
         _sensorWindow.add([accelX, accelY, accelZ, gyroX, gyroY, gyroZ]);
         if (_sensorWindow.length > _windowSize) {
           _sensorWindow.removeAt(0);
@@ -701,7 +706,6 @@ class _HomeTabState extends State<HomeTab> {
           }
         }
 
-        // 保存原始数据到 CSV
         _sensorData.add([
           sampleTime.toIso8601String(),
           accelX.toStringAsFixed(6),
@@ -721,7 +725,6 @@ class _HomeTabState extends State<HomeTab> {
     setState(() {});
   }
 
-  // ==================== 记录与保存 ====================
   void _startRecording() async {
     if (_isRecording) return;
 
@@ -813,7 +816,6 @@ class _HomeTabState extends State<HomeTab> {
     });
   }
 
-  // ==================== 运动检测接口 ====================
   void _onExerciseDetected(String exerciseName) {
     if (_currentExerciseName != null && _activeCounter != null) {
       int count = _getCurrentCount();
