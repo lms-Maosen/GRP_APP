@@ -64,6 +64,10 @@ class ExerciseCounter {
     _sampleCounter = 0;
   }
 
+  void reset() {
+    resetCount();
+  }
+
   void adjustThreshold({double? newPeak, double? newValley}) {
     if (newPeak != null) peakThreshold = newPeak;
     if (newValley != null) valleyThreshold = newValley;

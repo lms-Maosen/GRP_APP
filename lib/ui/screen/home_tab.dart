@@ -79,7 +79,7 @@ class _ButterworthFilter {
 class _SquatCounter {
   int _count = 0;
   bool _isInSquat = false;
-  final double threshold = 5.5; // 可根据实际信号调整
+  final double threshold = 6.5; // 可根据实际信号调整
 
   int get count => _count;
 
@@ -201,7 +201,7 @@ class _HomeTabState extends State<HomeTab> {
       case 'squat':
         _activeCounter = _squatCounter;
         break;
-      case 'bicep curl':
+      case 'bicep':
         _activeCounter = _bicepCurlCounter;
         break;
       default:
@@ -377,6 +377,24 @@ class _HomeTabState extends State<HomeTab> {
             detectedExercise == 'rest') {
           print('🏁 动作转换: $_currentExercise → rest');
           _onExerciseStopped();
+        }
+
+        if (_stableCount >= _stableThreshold &&
+            _connectedSubState == ConnectedSubState.showingExercise &&
+            detectedExercise != 'rest' &&
+            detectedExercise != _currentExercise) {
+          print('🔄 动作直接切换: $_currentExercise → $detectedExercise');
+          _onExerciseStopped();       // 先结算当前运动
+          _onExerciseDetected(detectedExercise);  // 再开始新运动
+        }
+
+// summary 期间检测到新运动，立即切换
+        if (_stableCount >= _stableThreshold &&
+            _connectedSubState == ConnectedSubState.showingSummary &&
+            detectedExercise != 'rest') {
+          print('⚡ Summary 期间检测到新动作: $detectedExercise');
+          _summaryTimer?.cancel();
+          _onExerciseDetected(detectedExercise);
         }
       } else {
         _stableCount = 0;
@@ -814,7 +832,7 @@ class _HomeTabState extends State<HomeTab> {
 
     String imagePath;
     switch (exerciseName.toLowerCase()) {
-      case 'bicep curl':
+      case 'bicep':
         imagePath = 'assets/images/bicepcurl.png';
         break;
       case 'bench press':
