@@ -165,7 +165,10 @@ class _HomeTabState extends State<HomeTab> {
     _setupBluetoothListeners();
     _checkCurrentConnections();
     _requestPermissions();
-    _updateParentConnectionState(); // 初始化时通知父级
+    // 延迟到第一帧后通知父级，避免在构建过程中调用 setState
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updateParentConnectionState();
+    });
   }
 
   @override

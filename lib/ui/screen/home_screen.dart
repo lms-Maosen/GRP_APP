@@ -15,13 +15,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-  bool _bottomNavEnabled = true; // 新增：控制底部导航栏是否可用
-
-  final List<Widget> _tabs = [
-    HomeTab(), // 注意：不再使用 const，因为需要传入回调
-    const HistoryTab(),
-    const SettingsTab(),
-  ];
+  bool _bottomNavEnabled = true; // 控制底部导航栏是否可用
 
   @override
   Widget build(BuildContext context) {
@@ -33,10 +27,10 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFFC168EE),
         foregroundColor: const Color(0xFFC168EE),
       ),
-      body: _tabs[_currentIndex],
+      body: _buildBody(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        // 关键修改：根据 _bottomNavEnabled 决定是否响应点击
+        // 根据 _bottomNavEnabled 决定是否响应点击
         onTap: _bottomNavEnabled
             ? (index) {
           setState(() {
@@ -63,5 +57,25 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  // 根据当前选中的标签页返回对应的 Widget
+  Widget _buildBody() {
+    switch (_currentIndex) {
+      case 0:
+        return HomeTab(
+          onConnectionStateChanged: (enabled) {
+            setState(() {
+              _bottomNavEnabled = enabled;
+            });
+          },
+        );
+      case 1:
+        return const HistoryTab();
+      case 2:
+        return const SettingsTab();
+      default:
+        return const SizedBox.shrink();
+    }
   }
 }
