@@ -12,7 +12,7 @@ dependencies:
   flutter:
     sdk: flutter
   tflite_flutter: ^0.12.1
-  flutter_blue_plus: ^1.30.0  # 添加这一行
+  flutter_blue_plus: ^1.30.0
   path_provider: ^2.1.1
   permission_handler: ^11.0.0
   csv: ^5.0.3
@@ -21,8 +21,6 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   intl: ^0.20.2
-  # 如果你还需要权限处理，可以添加：
-  # permission_handler: ^11.0.0
 
 dev_dependencies:
   flutter_test:

@@ -12,10 +12,12 @@ import '../../utils/bicepcurl_counter.dart' as bc;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:provider/provider.dart';
 import '../../providers/history_provider.dart';
+import '../../utils/bench_press_count.dart';
+import '../../utils/test_running_count.dart';
 
 enum ConnectedSubState { waiting, showingExercise, showingSummary }
 
-// ==================== 移动平均滤波器（三点平均） ====================
+// ==================== Moving average filter (three-point average) ====================
 class _MovingAverageFilter {
   final List<double> _buffer = [];
   final int _windowSize = 3;
@@ -69,32 +71,60 @@ class _ButterworthFilter {
   }
 }
 
-// ==================== 蹲起计数器（使用原始Z轴，阈值4.0） ====================
+// ==================== Squat Counter (using raw Z-axis, peak/valley thresholds) ====================
+// This replaces the old simple threshold counter with the improved logic from test_squat_count(2).dart
 class _SquatCounter {
   int _count = 0;
-  bool _isInSquat = false;
-  final double threshold = 6.5;
+  bool _isPeakDetected = false; // renamed to match the new logic
+
+  // Thresholds based on the improved version
+  double peakThreshold;   // threshold for entering squat (downward)
+  double valleyThreshold; // threshold for exiting squat (upward)
+
+  final List<double> _dataBuffer = [];
+  final int _bufferSize = 10;
+  int _sampleCounter = 0;
+  final int _minInterval = 15;
+
+  _SquatCounter({
+    double peakThreshold = 7.5,
+    double valleyThreshold = 6.0,
+  })  : peakThreshold = peakThreshold,
+        valleyThreshold = valleyThreshold;
 
   int get count => _count;
 
   void addSample(double rawValue) {
-    if (rawValue < threshold && !_isInSquat) {
-      _isInSquat = true;
-    } else if (rawValue > threshold && _isInSquat) {
+    _dataBuffer.add(rawValue);
+    if (_dataBuffer.length > _bufferSize) _dataBuffer.removeAt(0);
+    if (_dataBuffer.length < _bufferSize) return;
+
+    double avgValue = _dataBuffer.reduce((a, b) => a + b) / _bufferSize;
+    _sampleCounter++;
+
+    // Enter squat (peak detection)
+    if (avgValue < peakThreshold && !_isPeakDetected && _sampleCounter >= _minInterval) {
+      _isPeakDetected = true;
+      _sampleCounter = 0;
+    }
+    // Exit squat (valley detection) -> count one rep
+    else if (avgValue > valleyThreshold && _isPeakDetected && _sampleCounter >= _minInterval) {
       _count++;
-      print('✅ 蹲起计数 +1，当前总数: $_count');
-      _isInSquat = false;
+      _isPeakDetected = false;
+      _sampleCounter = 0;
     }
   }
 
   void reset() {
     _count = 0;
-    _isInSquat = false;
+    _isPeakDetected = false;
+    _dataBuffer.clear();
+    _sampleCounter = 0;
   }
 }
 
 class HomeTab extends StatefulWidget {
-  final ValueChanged<bool>? onConnectionStateChanged; // 新增回调
+  final ValueChanged<bool>? onConnectionStateChanged;
 
   const HomeTab({super.key, this.onConnectionStateChanged});
 
@@ -103,7 +133,7 @@ class HomeTab extends StatefulWidget {
 }
 
 class _HomeTabState extends State<HomeTab> {
-  // ==================== 蓝牙相关变量 ====================
+  // ==================== Bluetooth-related variables ====================
   StreamSubscription? _scanResultsSubscription;
   _ButterworthFilter? _imuFilter;
   StreamSubscription? _isScanningSubscription;
@@ -124,7 +154,7 @@ class _HomeTabState extends State<HomeTab> {
   double _sampleIntervalMs = 1000.0 / 104.0;
   bool _isConnecting = false;
 
-  // ==================== UI状态变量 ====================
+  // ==================== UI state variables ====================
   ConnectedSubState _connectedSubState = ConnectedSubState.waiting;
   String? _currentExercise;
   String? _currentExerciseImage;
@@ -135,13 +165,15 @@ class _HomeTabState extends State<HomeTab> {
   String _disconnectMessage = '';
   Timer? _disconnectTimer;
 
-  // ==================== 滤波与计数器 ====================
+  // ==================== Counters ====================
   _MovingAverageFilter? _filter;
   _SquatCounter? _squatCounter;
   bc.ExerciseCounter? _bicepCurlCounter;
-  dynamic _activeCounter;
+  BenchPressCounter? _benchPressCounter;   // new
+  WristRunningCounter? _runningCounter;    // new
+  dynamic _activeCounter; // will hold the currently active counter
 
-  // ==================== TFLite 模型相关 ====================
+  // ==================== TFLite model related ====================
   Interpreter? _interpreter;
   List<String> _labels = [];
   List<List<double>> _sensorWindow = [];
@@ -154,18 +186,17 @@ class _HomeTabState extends State<HomeTab> {
   final int _stableThreshold = 5;
   final double _confidenceThreshold = 0.7;
 
-  // ==================== 历史记录相关 ====================
+  // ==================== History related ====================
   List<ExerciseSet> _sessionExercises = [];
   String? _currentExerciseName;
 
-  // ==================== 初始化与销毁 ====================
+  // ==================== Initialization and Destruction ====================
   @override
   void initState() {
     super.initState();
     _setupBluetoothListeners();
     _checkCurrentConnections();
     _requestPermissions();
-    // 延迟到第一帧后通知父级，避免在构建过程中调用 setState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updateParentConnectionState();
     });
@@ -185,9 +216,8 @@ class _HomeTabState extends State<HomeTab> {
     super.dispose();
   }
 
-  // ==================== 辅助方法 ====================
+  // ==================== Helper methods ====================
   void _updateParentConnectionState() {
-    // 连接中或正在显示断开消息时禁用底部栏
     bool enabled = !(_isConnected || _showDisconnectMessage);
     widget.onConnectionStateChanged?.call(enabled);
   }
@@ -196,6 +226,8 @@ class _HomeTabState extends State<HomeTab> {
     _filter = _MovingAverageFilter();
     _squatCounter = _SquatCounter();
     _bicepCurlCounter = bc.ExerciseCounter();
+    _benchPressCounter = BenchPressCounter();   // new
+    _runningCounter = WristRunningCounter();    // new
     _activeCounter = null;
     _imuFilter = _ButterworthFilter();
   }
@@ -208,10 +240,16 @@ class _HomeTabState extends State<HomeTab> {
       case 'bicep':
         _activeCounter = _bicepCurlCounter;
         break;
+      case 'bench':
+        _activeCounter = _benchPressCounter;
+        break;
+      case 'run':
+        _activeCounter = _runningCounter;
+        break;
       default:
         _activeCounter = null;
     }
-    _activeCounter?.reset();
+    _activeCounter?.reset(); // ensure all counters have a reset() method
   }
 
   int _getCurrentCount() {
@@ -220,6 +258,11 @@ class _HomeTabState extends State<HomeTab> {
       return (_activeCounter as _SquatCounter).count;
     } else if (_activeCounter is bc.ExerciseCounter) {
       return (_activeCounter as bc.ExerciseCounter).count;
+    } else if (_activeCounter is BenchPressCounter) {
+      return (_activeCounter as BenchPressCounter).count;
+    } else if (_activeCounter is WristRunningCounter) {
+      // For running, we return the distance in meters as an integer (floor)
+      return (_activeCounter as WristRunningCounter).totalDistance.toInt();
     }
     return 0;
   }
@@ -228,6 +271,8 @@ class _HomeTabState extends State<HomeTab> {
     _filter = null;
     _squatCounter = null;
     _bicepCurlCounter = null;
+    _benchPressCounter = null;
+    _runningCounter = null;
     _activeCounter = null;
     _imuFilter = null;
     _connectedSubState = ConnectedSubState.waiting;
@@ -251,16 +296,16 @@ class _HomeTabState extends State<HomeTab> {
     _currentExerciseName = null;
   }
 
-  // ==================== 模型加载 ====================
+  // ==================== Model loading ====================
   Future<void> _loadModel() async {
     try {
       _interpreter = await Interpreter.fromAsset('assets/models/miniresnet_model.tflite');
-      print('✅ 模型加载成功');
+      print('✅ Model loaded successfully');
       var inputTensors = _interpreter!.getInputTensors();
-      print('模型输入张量: $inputTensors');
-      _labels = ['rest', 'squat', 'bicep'];
+      print('Model input tensor: $inputTensors');
+      _labels = ['rest', 'squat', 'bicep', 'bench', 'run'];
     } catch (e) {
-      print('❌ 模型加载失败: $e');
+      print('❌ Model loading failed: $e');
     }
   }
 
@@ -332,7 +377,7 @@ class _HomeTabState extends State<HomeTab> {
     return result;
   }
 
-  // ==================== 运动推理 ====================
+  // ==================== Motion inference ====================
   void _runInference() {
     if (_interpreter == null) return;
     if (_sensorWindow.length < _windowSize) return;
@@ -361,7 +406,7 @@ class _HomeTabState extends State<HomeTab> {
       }
 
       String detectedExercise = _labels[maxIndex];
-      print('📊 推理: $detectedExercise, 置信度: ${maxProb.toStringAsFixed(3)}, 稳定计数: $_stableCount');
+      print('📊 Inference: $detectedExercise, Confidence: ${maxProb.toStringAsFixed(3)}, Stable Count: $_stableCount');
 
       if (maxProb > _confidenceThreshold) {
         if (_currentInferredExercise == detectedExercise) {
@@ -372,14 +417,14 @@ class _HomeTabState extends State<HomeTab> {
         }
 
         if (_stableCount >= _stableThreshold && _connectedSubState == ConnectedSubState.waiting && detectedExercise != 'rest') {
-          print('🎯 动作转换: waiting → $detectedExercise');
+          print('🎯 Action transition: waiting → $detectedExercise');
           _onExerciseDetected(detectedExercise);
         }
 
         if (_stableCount >= _stableThreshold &&
             _connectedSubState == ConnectedSubState.showingExercise &&
             detectedExercise == 'rest') {
-          print('🏁 动作转换: $_currentExercise → rest');
+          print('🏁 Action transition: $_currentExercise → rest');
           _onExerciseStopped();
         }
 
@@ -387,7 +432,7 @@ class _HomeTabState extends State<HomeTab> {
             _connectedSubState == ConnectedSubState.showingExercise &&
             detectedExercise != 'rest' &&
             detectedExercise != _currentExercise) {
-          print('🔄 动作直接切换: $_currentExercise → $detectedExercise');
+          print('🔄 Direct action switching: $_currentExercise → $detectedExercise');
           _onExerciseStopped();
           _onExerciseDetected(detectedExercise);
         }
@@ -395,7 +440,7 @@ class _HomeTabState extends State<HomeTab> {
         if (_stableCount >= _stableThreshold &&
             _connectedSubState == ConnectedSubState.showingSummary &&
             detectedExercise != 'rest') {
-          print('⚡ Summary 期间检测到新动作: $detectedExercise');
+          print('⚡ New action detected during Summary: $detectedExercise');
           _summaryTimer?.cancel();
           _onExerciseDetected(detectedExercise);
         }
@@ -404,11 +449,11 @@ class _HomeTabState extends State<HomeTab> {
         _currentInferredExercise = null;
       }
     } catch (e) {
-      print('推理内部错误: $e');
+      print('Inference internal error: $e');
     }
   }
 
-  // ==================== 蓝牙相关方法 ====================
+  // ==================== Bluetooth-related methods ====================
   Future<void> _requestPermissions() async {
     if (await Permission.storage.isGranted == false) {
       await Permission.storage.request();
@@ -553,7 +598,7 @@ class _HomeTabState extends State<HomeTab> {
     });
   }
 
-  void _disconnectDevice() {
+  void _disconnectDevice(AppLocalizations loc) {
     if (_showDisconnectMessage) return;
     _summaryTimer?.cancel();
     _summaryTimer = null;
@@ -561,8 +606,8 @@ class _HomeTabState extends State<HomeTab> {
     setState(() {
       _showDisconnectMessage = true;
       _disconnectMessage = _hasDetectedExercise
-          ? 'Exercises have been recorded'
-          : 'No exercise detected';
+          ? loc.translate('Exercises have been recorded')
+          : loc.translate('No exercise detected');
     });
     _updateParentConnectionState();
 
@@ -633,15 +678,15 @@ class _HomeTabState extends State<HomeTab> {
               _dataSubscription = characteristic.onValueReceived.listen((value) {
                 _handleSensorData(value);
               });
-              print("成功订阅传感器数据");
+              print("Successfully subscribed to sensor data.");
               return;
             }
           }
         }
       }
-      print("未找到目标服务或特征值");
+      print("Target service or characteristic not found.");
     } catch (e) {
-      print("启动数据服务错误: $e");
+      print("Error starting data service: $e");
     }
   }
 
@@ -657,7 +702,7 @@ class _HomeTabState extends State<HomeTab> {
 
       int expectedLength = 1 + sampleCount * 24;
       if (data.length != expectedLength) {
-        print("数据长度不匹配: 期望 $expectedLength, 实际 ${data.length}");
+        print("Data length mismatch: expected $expectedLength, actual ${data.length}");
         return;
       }
 
@@ -681,16 +726,20 @@ class _HomeTabState extends State<HomeTab> {
         double gyroZ = byteData.getFloat32(offset, Endian.little);
         offset += 4;
 
-        // 滤波（用于显示或后续处理）
+        // Filtering (for display or subsequent processing)
         List<double> rawSample = [accelX, accelY, accelZ, gyroX, gyroY, gyroZ];
         List<double> filteredSample = _imuFilter!.filter(rawSample);
 
-        // 计数逻辑：使用原始 Z 轴
+        // Counting logic: call the appropriate method based on active counter type
         if (_activeCounter != null) {
           if (_activeCounter is _SquatCounter) {
             (_activeCounter as _SquatCounter).addSample(accelZ);
           } else if (_activeCounter is bc.ExerciseCounter) {
             (_activeCounter as bc.ExerciseCounter).countBySingleAxis(accelZ);
+          } else if (_activeCounter is BenchPressCounter) {
+            (_activeCounter as BenchPressCounter).countByZAxis(accelZ);
+          } else if (_activeCounter is WristRunningCounter) {
+            (_activeCounter as WristRunningCounter).countSwingCycleByXAxis(accelX);
           }
         }
 
@@ -705,7 +754,7 @@ class _HomeTabState extends State<HomeTab> {
           try {
             _runInference();
           } catch (e) {
-            print('推理异常: $e');
+            print('Inference exception: $e');
           }
         }
 
@@ -723,7 +772,7 @@ class _HomeTabState extends State<HomeTab> {
       }
 
     } catch (e) {
-      print("解析传感器数据错误: $e");
+      print("Error parsing sensor data: $e");
     }
     setState(() {});
   }
@@ -769,11 +818,11 @@ class _HomeTabState extends State<HomeTab> {
         _saveDataToCsv();
       });
 
-      print("开始自动记录数据到: $_csvFilePath");
-      print("记录起始时间: $_recordingStartTime");
+      print("Start automatically recording data to: $_csvFilePath");
+      print("Recording start time: $_recordingStartTime");
 
     } catch (e) {
-      print("获取存储路径失败: $e");
+      print("Failed to get storage path: $e");
       setState(() {
         _isRecording = false;
       });
@@ -789,12 +838,12 @@ class _HomeTabState extends State<HomeTab> {
       _isRecording = false;
       _totalSamplesReceived = 0;
     });
-    print("停止记录数据，文件保存在: $_csvFilePath");
-    print("总记录样本数: $_totalSamplesReceived");
+    print("Stop recording data, file saved at: $_csvFilePath");
+    print("Total recorded sample count: $_totalSamplesReceived");
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('数据已保存到: $_csvFilePath'),
+        content: Text('Data saved to: $_csvFilePath'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -806,9 +855,9 @@ class _HomeTabState extends State<HomeTab> {
       String csvData = const ListToCsvConverter().convert(_sensorData);
       File file = File(_csvFilePath);
       await file.writeAsString(csvData);
-      print("数据已保存到CSV文件，当前数据点: ${_sensorData.length}");
+      print("Data saved to CSV file, current data points: ${_sensorData.length}");
     } catch (e) {
-      print("保存CSV文件错误: $e");
+      print("Error saving CSV file: $e");
     }
   }
 
@@ -840,14 +889,11 @@ class _HomeTabState extends State<HomeTab> {
       case 'bicep':
         imagePath = 'assets/images/bicepcurl.png';
         break;
-      case 'bench press':
+      case 'bench':
         imagePath = 'assets/images/Bench press.png';
         break;
-      case 'running':
+      case 'run':
         imagePath = 'assets/images/Running.png';
-        break;
-      case 'sit-up':
-        imagePath = 'assets/images/Sit-up.png';
         break;
       case 'squat':
         imagePath = 'assets/images/Squat.png';
@@ -901,7 +947,7 @@ class _HomeTabState extends State<HomeTab> {
     });
   }
 
-  // ==================== UI构建 ====================
+  // ==================== UI construction ====================
   @override
   Widget build(BuildContext context) {
     final loc = AppLocalizations.of(context);
@@ -977,7 +1023,7 @@ class _HomeTabState extends State<HomeTab> {
         const SizedBox(height: 40),
         Center(
           child: ElevatedButton(
-            onPressed: _disconnectDevice,
+            onPressed: () => _disconnectDevice(loc),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
@@ -1017,7 +1063,7 @@ class _HomeTabState extends State<HomeTab> {
           ),
         const SizedBox(height: 40),
         ElevatedButton(
-          onPressed: _disconnectDevice,
+          onPressed: () => _disconnectDevice(loc),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red,
             foregroundColor: Colors.white,
@@ -1070,7 +1116,7 @@ class _HomeTabState extends State<HomeTab> {
         ),
         const SizedBox(height: 40),
         ElevatedButton(
-          onPressed: _disconnectDevice,
+          onPressed: () => _disconnectDevice(loc),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red,
             foregroundColor: Colors.white,

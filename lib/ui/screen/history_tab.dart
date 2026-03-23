@@ -229,12 +229,8 @@ class WorkoutDetailPage extends StatelessWidget {
         return 'assets/images/Bench press.png';
       case 'running':
         return 'assets/images/Running.png';
-      case 'sit-up':
-        return 'assets/images/Sit-up.png';
       case 'squat':
         return 'assets/images/Squat.png';
-      case 'jump rope':
-        return 'assets/images/Jump rope.png';
       default:
         return 'assets/images/Identify.png';
     }
@@ -245,7 +241,7 @@ class WorkoutDetailPage extends StatelessWidget {
   }
 }
 
-// ==================== Statistic Page (真实数据版) ====================
+// ==================== Statistic Page ====================
 class StatisticPage extends StatelessWidget {
   const StatisticPage({super.key});
 
@@ -253,8 +249,6 @@ class StatisticPage extends StatelessWidget {
     {'key': 'squat', 'image': 'assets/images/Squat.png', 'nameKey': 'squat'},
     {'key': 'bench press', 'image': 'assets/images/Bench press.png', 'nameKey': 'benchPress'},
     {'key': 'running', 'image': 'assets/images/Running.png', 'nameKey': 'running'},
-    {'key': 'sit-up', 'image': 'assets/images/Sit-up.png', 'nameKey': 'sitUp'},
-    {'key': 'jump rope', 'image': 'assets/images/Jump rope.png', 'nameKey': 'jumpRope'},
     {'key': 'bicep', 'image': 'assets/images/bicepcurl.png', 'nameKey': 'bicepCurl'},
   ];
 
@@ -323,7 +317,7 @@ class StatisticPage extends StatelessWidget {
   }
 }
 
-// ==================== Exercise Detail Page (真实数据版) ====================
+// ==================== Exercise Detail Page ====================
 class ExerciseDetailPage extends StatefulWidget {
   final String exerciseKey;
 

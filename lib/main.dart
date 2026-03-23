@@ -37,7 +37,7 @@ class MyApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: const HomeScreen(username: "当前用户名"),
+      home: const HomeScreen(username: "Current username"),
     );
   }
 }

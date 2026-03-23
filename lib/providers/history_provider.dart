@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
-// 一组相同运动且相同次数的记录
+// A set of records of the same exercise with the same number of repetitions.
 class ExerciseSet {
   final String exerciseName;
-  final int reps; // 每组次数
-  int sets;       // 组数
+  final int reps;
+  int sets;
 
   ExerciseSet({required this.exerciseName, required this.reps, this.sets = 1});
 
@@ -25,7 +25,7 @@ class ExerciseSet {
   void addSet(int count) => sets += count;
 }
 
-// 一次断连会话内的所有运动组
+// All exercise groups within a disconnection session.
 class WorkoutSession {
   final DateTime date;
   final List<ExerciseSet> exercises;
@@ -52,7 +52,7 @@ class HistoryProvider extends ChangeNotifier {
 
   List<WorkoutSession> get sessions => _sessions;
 
-  // 按日期分组，并合并相同运动相同次数的组
+  // Group by date and merge groups with the same exercise and the same number of repetitions.
   Map<DateTime, List<ExerciseSet>> get groupedByDate {
     Map<DateTime, List<ExerciseSet>> map = {};
     for (var session in _sessions) {

@@ -15,7 +15,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-  bool _bottomNavEnabled = true; // 控制底部导航栏是否可用
+  bool _bottomNavEnabled = true; // Control whether the bottom navigation bar is enabled.
 
   @override
   Widget build(BuildContext context) {
@@ -30,15 +30,15 @@ class _HomeScreenState extends State<HomeScreen> {
       body: _buildBody(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
-        // 根据 _bottomNavEnabled 决定是否响应点击
+        // Determine whether to respond to clicks based on _bottomNavEnabled.
         onTap: _bottomNavEnabled
             ? (index) {
           setState(() {
             _currentIndex = index;
           });
         }
-            : null, // 禁用时 onTap 为 null，则无法点击
-        // 动态设置颜色以反映禁用状态
+            : null, // When disabled, onTap is null, so it cannot be clicked.
+        // Dynamically set color to reflect disabled state.
         selectedItemColor: _bottomNavEnabled ? null : Colors.grey,
         unselectedItemColor: _bottomNavEnabled ? null : Colors.grey,
         items: [
@@ -59,7 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 根据当前选中的标签页返回对应的 Widget
+  // Return the corresponding Widget based on the currently selected tab.
   Widget _buildBody() {
     switch (_currentIndex) {
       case 0:

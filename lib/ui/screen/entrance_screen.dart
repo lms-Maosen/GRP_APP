@@ -7,33 +7,32 @@ class EntranceScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 屏幕尺寸（用于计算紫色区域大小）
+    // Screen size (used to calculate the size of the purple area)
     final screenSize = MediaQuery.of(context).size;
 
-    // 3秒后自动跳转到首页（可修改秒数）
+    // Automatically redirect to the home page after 3 seconds
     Timer(const Duration(seconds: 3), () {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (context) => const HomeScreen(username: 'User'), // 传递用户名
+          builder: (context) => const HomeScreen(username: 'User'), // Pass the username
         ),
       );
     });
 
     return Scaffold(
-      // 外层深棕色背景（设计图中的外层边框色）
+      // Outer dark brown background
       backgroundColor: const Color(0xFFC168EE),
       body: Center(
         child: Container(
-          // 紫色区域尺寸：宽度占屏幕90%，高度占屏幕85%
+          //  purple area size: width 90% of screen, height 85% of screen
           width: screenSize.width * 0.9,
           height: screenSize.height * 0.85,
-          // 紫色背景（与设计图一致）
+          // purple background
           color: const Color(0xFFDDA0DD),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Logo图片
               Image.asset(
                 'assets/images/log.png',
                 width: 120,
@@ -41,7 +40,6 @@ class EntranceScreen extends StatelessWidget {
                 fit: BoxFit.contain,
               ),
               const SizedBox(height: 30),
-              // 文字内容
               const Text(
                 'WELCOME TO\nSMART FITNESS POD',
                 textAlign: TextAlign.center,
@@ -50,7 +48,7 @@ class EntranceScreen extends StatelessWidget {
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.2,
-                  height: 1.2, // 调整行距
+                  height: 1.2,
                 ),
               ),
             ],

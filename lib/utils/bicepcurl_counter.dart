@@ -2,18 +2,18 @@ import 'dart:math';
 
 class ExerciseCounter {
   int _count = 0;
-  // 1. 大幅放宽阈值，更容易触发
-  double peakThreshold;   // 从-4.0调至-3.0，更接近0，更容易触发峰值
-  double valleyThreshold; // 从-2.0调至-1.5，更接近0，更容易触发谷值
+  // 1. Significantly relax the threshold to make it easier to trigger.
+  double peakThreshold;   // Adjust the threshold from -4.0 to -3.0, moving it closer to zero to make peak triggering easier.
+  double valleyThreshold; // Adjust the threshold from -2.0 to -1.5, moving it closer to zero to make valley triggering easier.
   bool _isPeakDetected = false;
 
-  // 2. 减小缓存窗口，降低平滑度，对变化更敏感
+  // 2. Reduce the buffer window, lower the smoothness, and become more sensitive to changes.
   final List<double> _dataBuffer = [];
-  final int _bufferSize = 10; // 从20调至10，约96ms
+  final int _bufferSize = 10; // Adjust from 20 to 10, approximately 96 ms.
 
-  // 3. 缩短最小间隔，允许更快的连续动作
+  // 3. Shorten the minimum interval to allow faster consecutive actions.
   int _sampleCounter = 0;
-  final int _minInterval = 15; // 从30调至15，约144ms
+  final int _minInterval = 15; // Adjust from 30 to 15, approximately 144 ms.
 
   ExerciseCounter({
     double peakThreshold = -3.0,
@@ -31,7 +31,7 @@ class ExerciseCounter {
     double avgValue = _dataBuffer.reduce((a, b) => a + b) / _bufferSize;
     _sampleCounter++;
 
-    // 判定逻辑不变，仅参数放宽
+    // The judgment logic remains unchanged; only the parameters have been relaxed.
     if (avgValue < peakThreshold && !_isPeakDetected && _sampleCounter >= _minInterval) {
       _isPeakDetected = true;
       _sampleCounter = 0;
