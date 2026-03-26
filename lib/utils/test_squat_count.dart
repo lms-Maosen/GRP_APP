@@ -3,17 +3,17 @@ import 'dart:async';
 import 'package:csv/csv.dart';
 import 'dart:math';
 
-// 安全地将字符串转换为 double，若失败则返回 0.0
+// Safely convert string to double, return 0.0 on failure
 double safeParseDouble(dynamic value) {
   try {
     return double.parse(value.toString());
   } catch (e) {
-    print("无法转换为数字: $value");
-    return 0.0; // 如果无法转换为 double，则返回 0.0
+    print("Cannot convert to number: $value");
+    return 0.0; // Return 0.0 if conversion fails
   }
 }
 
-// 读取CSV文件并应用数据处理
+// Read CSV file and apply data processing
 Future<List<List<dynamic>>> readCsv(String filePath) async {
   final inputFile = File(filePath);
   final inputCsv = await inputFile.readAsString();
@@ -24,15 +24,15 @@ class SquatCounter {
   int _count = 0;
   bool _isPeakDetected = false;
 
-  // 设定阈值
-  double peakThreshold;   // 设置峰值阈值（起身时）
-  double valleyThreshold; // 设置谷值阈值（下蹲时）
+  // Set thresholds
+  double peakThreshold;   // Set peak threshold (when standing up)
+  double valleyThreshold; // Set valley threshold (when squatting down)
 
-  // 缓存数据和最小间隔
+  // Cache data and minimum interval
   final List<double> _dataBuffer = [];
-  final int _bufferSize = 10;  // 缓存窗口
+  final int _bufferSize = 10;  // Buffer window
   int _sampleCounter = 0;
-  final int _minInterval = 15; // 最小间隔
+  final int _minInterval = 15; // Minimum interval
 
   SquatCounter({
     double peakThreshold = 7.5,
@@ -42,7 +42,7 @@ class SquatCounter {
 
   int get count => _count;
 
-  // 实时更新计数
+  // Update count in real time
   void countBySingleAxis(double filteredValue) {
     _dataBuffer.add(filteredValue);
     if (_dataBuffer.length > _bufferSize) _dataBuffer.removeAt(0);
@@ -51,18 +51,18 @@ class SquatCounter {
     double avgValue = _dataBuffer.reduce((a, b) => a + b) / _bufferSize;
     _sampleCounter++;
 
-    // 判断下蹲阶段
+    // Determine squat phase
     if (avgValue < peakThreshold && !_isPeakDetected && _sampleCounter >= _minInterval) {
-      _isPeakDetected = true;  // 进入下蹲阶段
-      _sampleCounter = 0;      // 重置计数
+      _isPeakDetected = true;  // Enter squat phase
+      _sampleCounter = 0;      // Reset counter
     } else if (avgValue > valleyThreshold && _isPeakDetected && _sampleCounter >= _minInterval) {
-      _count++;  // 完成一次深蹲
-      _isPeakDetected = false;  // 退出深蹲状态
-      _sampleCounter = 0;       // 重置计数
+      _count++;  // Complete one squat
+      _isPeakDetected = false; // Exit squat state
+      _sampleCounter = 0;      // Reset counter
     }
   }
 
-  // 处理三轴加速度数据
+  // Process three-axis acceleration data
   void countBy3Axis(Map<String, double> filtered3Axis) {
     double zValue = filtered3Axis['z'] ?? 0.0;
     countBySingleAxis(zValue);
@@ -75,7 +75,7 @@ class SquatCounter {
     _sampleCounter = 0;
   }
 
-  // 调整阈值
+  // Adjust threshold
   void adjustThreshold({double? newPeak, double? newValley}) {
     if (newPeak != null) peakThreshold = newPeak;
     if (newValley != null) valleyThreshold = newValley;
@@ -83,36 +83,36 @@ class SquatCounter {
   }
 }
 
-// 实时深蹲计数器（修改后的打印逻辑）
+// Real-time squat counter (modified printing logic)
 Future<void> startRealTimeSquatCounting(String filePath) async {
   SquatCounter squatCounter = SquatCounter(peakThreshold: 7.5, valleyThreshold: 6.0);
-  // 🔴 核心修改1：新增变量记录上一次的计数，初始为0
+  // Core modification 1: Add variable to record previous count, initial 0
   int lastCount = 0;
 
-  // 读取CSV数据（模拟实时数据流）
+  // Read CSV data (simulate real-time data stream)
   List<List<dynamic>> rows = await readCsv(filePath);
 
-  // 遍历每行数据并更新计数
+  // Iterate through each row and update count
   for (int i = 1; i < rows.length; i++) {
     double filteredZAcceleration = safeParseDouble(rows[i][3]);
     squatCounter.countBySingleAxis(filteredZAcceleration);
 
-    // 🔴 核心修改2：仅当计数增加（完成新深蹲）时打印
+    // Core modification 2: Print only when count increases (new squat completed)
     int currentCount = squatCounter.count;
     if (currentCount > lastCount) {
-      print("实时深蹲次数为：$currentCount");
-      // 如需模拟真实运动间隔，可保留延迟（建议毫秒级，避免卡顿）
+      print("Real-time squat count: $currentCount");
+      // To simulate real movement interval, keep the delay (milliseconds recommended to avoid lag)
       // await Future.delayed(Duration(milliseconds: 100));
-      // 更新上一次计数，避免重复打印
+      // Update previous count to avoid duplicate printing
       lastCount = currentCount;
     }
   }
 
-  // 输出最终总次数
-  print("\n最终深蹲次数为：${squatCounter.count}");
+  // Output final total count
+  print("\nFinal squat count: ${squatCounter.count}");
 }
 
 void main() async {
-  String filePath = 'filtered_data.csv'; // 替换为实际的文件路径
-  await startRealTimeSquatCounting(filePath);  // 实时计数
+  String filePath = 'filtered_data.csv';
+  await startRealTimeSquatCounting(filePath); // Real-time counting
 }

@@ -2,33 +2,46 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'home_screen.dart';
 
-class EntranceScreen extends StatelessWidget {
+class EntranceScreen extends StatefulWidget {
   const EntranceScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    // Screen size (used to calculate the size of the purple area)
-    final screenSize = MediaQuery.of(context).size;
+  State<EntranceScreen> createState() => _EntranceScreenState();
+}
 
-    // Automatically redirect to the home page after 3 seconds
-    Timer(const Duration(seconds: 3), () {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const HomeScreen(username: 'User'), // Pass the username
-        ),
-      );
+class _EntranceScreenState extends State<EntranceScreen> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(seconds: 3), () {
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const HomeScreen(username: 'User'),
+          ),
+        );
+      }
     });
+  }
 
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
     return Scaffold(
-      // Outer dark brown background
       backgroundColor: const Color(0xFFC168EE),
       body: Center(
         child: Container(
-          //  purple area size: width 90% of screen, height 85% of screen
           width: screenSize.width * 0.9,
           height: screenSize.height * 0.85,
-          // purple background
           color: const Color(0xFFDDA0DD),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,

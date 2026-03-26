@@ -72,12 +72,10 @@ class _ButterworthFilter {
 }
 
 // ==================== Squat Counter (using raw Z-axis, peak/valley thresholds) ====================
-// This replaces the old simple threshold counter with the improved logic from test_squat_count(2).dart
 class _SquatCounter {
   int _count = 0;
-  bool _isPeakDetected = false; // renamed to match the new logic
+  bool _isPeakDetected = false;
 
-  // Thresholds based on the improved version
   double peakThreshold;   // threshold for entering squat (downward)
   double valleyThreshold; // threshold for exiting squat (upward)
 
@@ -169,8 +167,8 @@ class _HomeTabState extends State<HomeTab> {
   _MovingAverageFilter? _filter;
   _SquatCounter? _squatCounter;
   bc.ExerciseCounter? _bicepCurlCounter;
-  BenchPressCounter? _benchPressCounter;   // new
-  WristRunningCounter? _runningCounter;    // new
+  BenchPressCounter? _benchPressCounter;
+  WristRunningCounter? _runningCounter;
   dynamic _activeCounter; // will hold the currently active counter
 
   // ==================== TFLite model related ====================
