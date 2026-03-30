@@ -365,7 +365,7 @@ class _HomeTabState extends State<HomeTab> {
       print('✅ Model loaded successfully');
       var inputTensors = _interpreter!.getInputTensors();
       print('Model input tensor: $inputTensors');
-      _labels = ['rest', 'squat', 'bicep', 'bench', 'run']; // model output shape [1,5]
+      _labels = ['rest', 'squat', 'bicep', 'bench', 'run'];
     } catch (e) {
       print('❌ Model loading failed: $e');
     }

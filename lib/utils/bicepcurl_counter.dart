@@ -3,17 +3,17 @@ import 'dart:math';
 class ExerciseCounter {
   int _count = 0;
   // 1. Significantly relax the threshold to make it easier to trigger.
-  double peakThreshold;   // Adjust the threshold from -4.0 to -3.0, moving it closer to zero to make peak triggering easier.
-  double valleyThreshold; // Adjust the threshold from -2.0 to -1.5, moving it closer to zero to make valley triggering easier.
+  double peakThreshold;
+  double valleyThreshold;
   bool _isPeakDetected = false;
 
   // 2. Reduce the buffer window, lower the smoothness, and become more sensitive to changes.
   final List<double> _dataBuffer = [];
-  final int _bufferSize = 10; // Adjust from 20 to 10, approximately 96 ms.
+  final int _bufferSize = 10;
 
   // 3. Shorten the minimum interval to allow faster consecutive actions.
   int _sampleCounter = 0;
-  final int _minInterval = 15; // Adjust from 30 to 15, approximately 144 ms.
+  final int _minInterval = 15;
 
   ExerciseCounter({
     double peakThreshold = -3.0,
@@ -31,7 +31,6 @@ class ExerciseCounter {
     double avgValue = _dataBuffer.reduce((a, b) => a + b) / _bufferSize;
     _sampleCounter++;
 
-    // The judgment logic remains unchanged; only the parameters have been relaxed.
     if (avgValue < peakThreshold && !_isPeakDetected && _sampleCounter >= _minInterval) {
       _isPeakDetected = true;
       _sampleCounter = 0;

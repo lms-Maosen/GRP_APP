@@ -9,7 +9,7 @@ double safeParseDouble(dynamic value) {
     return double.parse(value.toString());
   } catch (e) {
     print("Cannot convert to number: $value");
-    return 0.0; // Return 0.0 if conversion fails
+    return 0.0;
   }
 }
 
@@ -75,7 +75,6 @@ class SquatCounter {
     _sampleCounter = 0;
   }
 
-  // Adjust threshold
   void adjustThreshold({double? newPeak, double? newValley}) {
     if (newPeak != null) peakThreshold = newPeak;
     if (newValley != null) valleyThreshold = newValley;

@@ -24,17 +24,16 @@ Future<List<List<dynamic>>> readFilteredCsv(String filePath) async {
 
 // 3. Core class: wristband running distance counter (adjusted thresholds + smoothing parameters to solve under‑counting)
 class WristRunningCounter {
-  int _swingCycle = 0;        // Arm swing cycle count
-  bool _isPeakDetected = false; // Flag for forward swing peak
+  int _swingCycle = 0;
+  bool _isPeakDetected = false;
 
-  // Adjusted thresholds to be more lenient (adapt to actual arm swing, reduce under‑counting)
-  double swingPeakThreshold;   // Forward swing peak: 1.0 (originally 1.3, more lenient)
-  double swingValleyThreshold; // Backward swing valley: -0.8 (originally -1.1, more lenient)
+  double swingPeakThreshold;
+  double swingValleyThreshold;
 
   // Adjusted smoothing parameters for faster response
   final List<double> _dataBuffer = [];
-  final int _bufferSize = 3;    // Window size from 5 → 3, faster response
-  final int _minInterval = 3;   // Interval from 6 → 3, adapts to higher swing frequency
+  final int _bufferSize = 3;
+  final int _minInterval = 3;
   int _sampleCounter = 0;
 
   // Constructor: initialise adjusted thresholds
@@ -44,10 +43,10 @@ class WristRunningCounter {
   })  : swingPeakThreshold = swingPeakThreshold,
         swingValleyThreshold = swingValleyThreshold;
 
-  // Get total distance (1 cycle = 1.6 meters, logic unchanged)
+  // Get total distance (1 cycle = 1.6 meters)
   double get totalDistance => _swingCycle * 1.6;
 
-  // Core: X‑axis swing cycle detection (logic unchanged, only parameters adjusted)
+  // Core: X‑axis swing cycle detection
   void countSwingCycleByXAxis(double xValue) {
     _dataBuffer.add(xValue);
     if (_dataBuffer.length > _bufferSize) _dataBuffer.removeAt(0);

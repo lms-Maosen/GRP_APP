@@ -60,8 +60,8 @@ class BenchPressCounter {
     // Step 3: detect full bench press cycle (descent → ascent)
     // Case 1: barbell descent (average below valley threshold and not already in lowered state)
     if (avgZValue < valleyThreshold && !_isLowered && _sampleCounter >= _minInterval) {
-      _isLowered = true;       // Mark as lowered
-      _sampleCounter = 0;      // Reset interval counter
+      _isLowered = true;
+      _sampleCounter = 0;
     }
     // Case 2: barbell ascent (average above peak threshold and was in lowered state → one rep completed)
     else if (avgZValue > peakThreshold && _isLowered && _sampleCounter >= _minInterval) {
@@ -118,12 +118,9 @@ Future<void> startBenchPressCounting(String filePath) async {
     if (currentCount > lastCount) {
       print("Real‑time bench press count: $currentCount");
       lastCount = currentCount;
-      // Optional: simulate real movement interval (each rep ~1 second, can keep delay or remove)
-      // await Future.delayed(const Duration(milliseconds: 800));
     }
   }
 
-  // Output final result
   print("\n=====================");
   print("Bench press counting finished. Final count: ${benchCounter.count}");
   print("=====================");
