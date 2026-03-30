@@ -79,6 +79,8 @@ class BenchPressCounter {
     _sampleCounter = 0;
   }
 
+  void reset() => resetCount();
+
   // 6. Helper method: adjust thresholds (adapt to different users / devices)
   void adjustThreshold({double? newValley, double? newPeak}) {
     if (newValley != null) valleyThreshold = newValley;

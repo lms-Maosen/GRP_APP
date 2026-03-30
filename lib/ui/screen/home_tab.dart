@@ -186,6 +186,7 @@ class _HomeTabState extends State<HomeTab> {
 
   // ==================== History related ====================
   List<ExerciseSet> _sessionExercises = [];
+  String? _currentExerciseKey;
   String? _currentExerciseName;
 
   // ==================== Initialization and Destruction ====================
@@ -224,14 +225,14 @@ class _HomeTabState extends State<HomeTab> {
     _filter = _MovingAverageFilter();
     _squatCounter = _SquatCounter();
     _bicepCurlCounter = bc.ExerciseCounter();
-    _benchPressCounter = BenchPressCounter();   // new
-    _runningCounter = WristRunningCounter();    // new
+    _benchPressCounter = BenchPressCounter();
+    _runningCounter = WristRunningCounter();
     _activeCounter = null;
     _imuFilter = _ButterworthFilter();
   }
 
   void _setActiveCounter(String exerciseName) {
-    switch (exerciseName.toLowerCase()) {
+    switch (_normalizeExerciseLabel(exerciseName)) {
       case 'squat':
         _activeCounter = _squatCounter;
         break;
@@ -259,7 +260,6 @@ class _HomeTabState extends State<HomeTab> {
     } else if (_activeCounter is BenchPressCounter) {
       return (_activeCounter as BenchPressCounter).count;
     } else if (_activeCounter is WristRunningCounter) {
-      // For running, we return the distance in meters as an integer (floor)
       return (_activeCounter as WristRunningCounter).totalDistance.toInt();
     }
     return 0;
@@ -291,7 +291,71 @@ class _HomeTabState extends State<HomeTab> {
     _stableCount = 0;
 
     _sessionExercises.clear();
+    _currentExerciseKey = null;
     _currentExerciseName = null;
+  }
+
+  String _normalizeExerciseLabel(String label) {
+    String normalized = label
+        .trim()
+        .toLowerCase()
+        .replaceAll('_', ' ')
+        .replaceAll('-', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ');
+
+    switch (normalized) {
+      case 'rest':
+      case 'idle':
+      case 'none':
+        return 'rest';
+      case 'squat':
+      case 'squats':
+        return 'squat';
+      case 'bicep':
+      case 'bicep curl':
+      case 'bicep curls':
+      case 'biceps':
+        return 'bicep';
+      case 'bench':
+      case 'bench press':
+      case 'benchpress':
+        return 'bench';
+      case 'run':
+      case 'running':
+      case 'jog':
+      case 'jogging':
+        return 'run';
+      default:
+        return normalized;
+    }
+  }
+
+  String _historyExerciseName(String normalizedKey) {
+    switch (normalizedKey) {
+      case 'bench':
+        return 'bench press';
+      case 'run':
+        return 'running';
+      case 'bicep':
+        return 'bicep curl';
+      default:
+        return normalizedKey;
+    }
+  }
+
+  String _displayExerciseName(String normalizedKey) {
+    switch (normalizedKey) {
+      case 'bench':
+        return 'Bench Press';
+      case 'run':
+        return 'Running';
+      case 'bicep':
+        return 'Bicep Curl';
+      case 'squat':
+        return 'Squat';
+      default:
+        return normalizedKey;
+    }
   }
 
   // ==================== Model loading ====================
@@ -301,7 +365,7 @@ class _HomeTabState extends State<HomeTab> {
       print('✅ Model loaded successfully');
       var inputTensors = _interpreter!.getInputTensors();
       print('Model input tensor: $inputTensors');
-      _labels = ['rest', 'squat', 'bicep', 'bench', 'run'];
+      _labels = ['rest', 'squat', 'bicep', 'bench', 'run']; // model output shape [1,5]
     } catch (e) {
       print('❌ Model loading failed: $e');
     }
@@ -382,7 +446,6 @@ class _HomeTabState extends State<HomeTab> {
 
     try {
       List<List<double>> filtered = _filtfilt(_sensorWindow);
-
       List<double> flatten = [];
       for (var sample in _sensorWindow) {
         flatten.addAll(sample);
@@ -403,8 +466,9 @@ class _HomeTabState extends State<HomeTab> {
         }
       }
 
-      String detectedExercise = _labels[maxIndex];
-      print('📊 Inference: $detectedExercise, Confidence: ${maxProb.toStringAsFixed(3)}, Stable Count: $_stableCount');
+      String rawDetectedExercise = _labels[maxIndex];
+      String detectedExercise = _normalizeExerciseLabel(rawDetectedExercise);
+      print('📊 Inference: $rawDetectedExercise -> $detectedExercise, Confidence: ${maxProb.toStringAsFixed(3)}, Stable Count: $_stableCount');
 
       if (maxProb > _confidenceThreshold) {
         if (_currentInferredExercise == detectedExercise) {
@@ -429,8 +493,8 @@ class _HomeTabState extends State<HomeTab> {
         if (_stableCount >= _stableThreshold &&
             _connectedSubState == ConnectedSubState.showingExercise &&
             detectedExercise != 'rest' &&
-            detectedExercise != _currentExercise) {
-          print('🔄 Direct action switching: $_currentExercise → $detectedExercise');
+            detectedExercise != _currentExerciseKey) {
+          print('🔄 Direct action switching: $_currentExerciseKey → $detectedExercise');
           _onExerciseStopped();
           _onExerciseDetected(detectedExercise);
         }
@@ -878,12 +942,15 @@ class _HomeTabState extends State<HomeTab> {
       }
     }
 
-    _setActiveCounter(exerciseName);
+    final normalizedExercise = _normalizeExerciseLabel(exerciseName);
+
+    _setActiveCounter(normalizedExercise);
     _activeCounter?.reset();
-    _currentExerciseName = exerciseName;
+    _currentExerciseKey = normalizedExercise;
+    _currentExerciseName = _historyExerciseName(normalizedExercise);
 
     String imagePath;
-    switch (exerciseName.toLowerCase()) {
+    switch (normalizedExercise) {
       case 'bicep':
         imagePath = 'assets/images/bicepcurl.png';
         break;
@@ -901,7 +968,7 @@ class _HomeTabState extends State<HomeTab> {
     }
 
     setState(() {
-      _currentExercise = exerciseName;
+      _currentExercise = _displayExerciseName(normalizedExercise);
       _currentExerciseImage = imagePath;
       _connectedSubState = ConnectedSubState.showingExercise;
       _hasDetectedExercise = true;
@@ -924,7 +991,8 @@ class _HomeTabState extends State<HomeTab> {
       }
     }
 
-    _currentExerciseName = null;
+  _currentExerciseKey = null;
+  _currentExerciseName = null;
     _activeCounter?.reset();
 
     setState(() {

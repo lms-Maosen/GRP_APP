@@ -75,6 +75,8 @@ class WristRunningCounter {
     _sampleCounter = 0;
   }
 
+  void reset() => resetCount();
+
   // Fine‑tune thresholds (can be adjusted manually)
   void adjustThreshold({double? newPeak, double? newValley}) {
     if (newPeak != null) swingPeakThreshold = newPeak;
