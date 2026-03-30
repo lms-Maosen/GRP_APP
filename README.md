@@ -29,7 +29,8 @@
 
 ---
 
-## Project Structure
+## Main Project Structure
+```plain
 smart_fitness_pod/
 ├── assets/
 │   ├── images/                # UI images
@@ -72,7 +73,7 @@ smart_fitness_pod/
 ├── test_driver/               # Integration test driver
 │   └── app_test.dart
 └── pubspec.yaml               # Dependencies
-
+```
 ---
 
 ## Key Components
@@ -182,6 +183,7 @@ The project includes unit tests and widget tests covering:
 Run all tests with:
 ```bash
 flutter test
+```
 
 ## Development Notes
 
